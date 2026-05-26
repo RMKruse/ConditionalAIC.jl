@@ -1,0 +1,103 @@
+# ──────────────────────────────────────────────────────────────
+# OS / editor cruft
+# ──────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# ──────────────────────────────────────────────────────────────
+# Julia
+# ──────────────────────────────────────────────────────────────
+# Compiled / precompiled artifacts
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+deps/build.log
+deps/downloads/
+deps/usr/
+deps/src/
+
+# Package operation logs
+*.jl.history
+
+# Documentation build output (Documenter.jl)
+docs/build/
+docs/site/
+
+# Per-environment Manifest files.
+# NOTE: this package commits its top-level Manifest.toml on purpose
+# (exact MixedModels pin — see CLAUDE.md §3), so it is force-unignored below.
+# Manifests in sub-environments (docs/, test/, benchmarks/) stay ignored.
+**/Manifest.toml
+!/Manifest.toml
+
+# ──────────────────────────────────────────────────────────────
+# R
+# ──────────────────────────────────────────────────────────────
+# History and session data
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+
+# Session / project files
+.Rproj.user/
+*.Rproj
+
+# Compiled
+*.o
+*.so
+*.dll
+*.rds
+
+# R package check / build
+..Rcheck/
+*.Rcheck/
+vignettes/*.html
+vignettes/*.pdf
+*_cache/
+/cache/
+
+# renv (R dependency management)
+renv/library/
+renv/local/
+renv/cellar/
+renv/lock/
+renv/python/
+renv/staging/
+
+# knitr / R Markdown
+*.utf8.md
+*.knit.md
+
+# ──────────────────────────────────────────────────────────────
+# Claude Code
+# ──────────────────────────────────────────────────────────────
+# Local, machine-specific settings and state stay out of the repo.
+# NOTE: CLAUDE.md and .claude/settings.json are committed on purpose
+# (shared project config), so they are force-unignored below.
+.claude/*
+!.claude/settings.json
+.claude/settings.local.json
+CLAUDE.local.md
+
+# ──────────────────────────────────────────────────────────────
+# Misc build / coverage / temp
+# ──────────────────────────────────────────────────────────────
+coverage/
+*.cov
+*.log
+*.tmp
