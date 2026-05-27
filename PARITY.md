@@ -48,7 +48,7 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 
 | Family | `cAIC4` df route | `cAIC.jl` milestone | Status | Notes |
 |--------|------------------|---------------------|--------|-------|
-| Gaussian LMM | steinian (analytic Greven–Kneib) | M2 | 🟦 | The core; full GK bias correction. |
+| Gaussian LMM | steinian (analytic Greven–Kneib) | M2 | 🟡 | The core; full GK bias correction. Level-1 df arithmetic (`calculateGaussianBc` → `dof_lmm`) ported and validated against `cAIC4` v1.1 via the HDF5 fixture pipeline (#7); full `caic` assembly + Level-2 still pending. |
 | Poisson GLMM | steinian | M3 | ⬜ | Analytic Stein route; refitting cost ungrilled. |
 | Bernoulli / binomial GLMM | steinian | M3 | ⬜ | Analytic Stein route. |
 | other GLMM families | conditional bootstrap | M3 | ⬜ | Bootstrap fallback (Efron). |

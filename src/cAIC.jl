@@ -12,7 +12,9 @@ quarantined in the [`cAIC.MMInternals`](@ref) submodule.
 module cAIC
 
 include("numerics.jl")
+include("loglik.jl")
 include("mm_internals.jl")
+include("dof_lmm.jl")
 
 # ── Public surface ──────────────────────────────────────────────────────────
 # Declared here as zero-method stubs so `using cAIC` exposes a stable export
