@@ -330,3 +330,4 @@ either fix `cAIC.jl` or record a justified deviation in `DECISIONS.md`.
 - **Do not** add a runtime dependency without a `DECISIONS.md` entry. `RCall`
   stays test-only.
 - **Do not** treat a singular fit as an unexpected error — it is a supported case.
+- **Do not** mention or reference CLAUDE.md or its content in anyform in the documentation or in comments.

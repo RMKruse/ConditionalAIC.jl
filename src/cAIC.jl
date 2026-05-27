@@ -11,6 +11,7 @@ quarantined in the [`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
 
+include("numerics.jl")
 include("mm_internals.jl")
 
 # ── Public surface ──────────────────────────────────────────────────────────
