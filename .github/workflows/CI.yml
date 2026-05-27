@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Gate 1 — formatting (JuliaFormatter, Blue style). Version-independent, one job.
+  format:
+    name: Format (JuliaFormatter / Blue)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Check Blue-style formatting
+        shell: julia --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.activate(; temp=true)
+          Pkg.add(PackageSpec(name="JuliaFormatter", version="2.4.0"))
+          using JuliaFormatter
+          if !format("."; verbose=true)
+              @error "Not formatted to the Blue style. Run JuliaFormatter.format(\".\") and commit."
+              exit(1)
+          end
+
+  # Gates 2 & 3 — JET static analysis and the full test suite (Aqua + @inferred +
+  # smoke), both run inside `Pkg.test` across the support matrix. No R required.
+  test:
+    name: Test - Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.version == 'nightly' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.10', '1.11', 'nightly']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
