@@ -101,3 +101,5 @@ coverage/
 *.cov
 *.log
 *.tmp
+docs/Greven & Kneib (2010).pdf
+docs/Saefken et al - Conditional Model Selection in Mixed-Effects Models with cAIC4.pdf
