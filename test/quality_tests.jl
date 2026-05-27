@@ -8,7 +8,14 @@
 end
 
 @testitem "JET static analysis" begin
-    using JET
+    # JET tracks unstable compiler internals and has no release for prerelease
+    # Julia; on `nightly` it is also dropped from the test env (see CI.yml), so
+    # `using JET` must not be reached there. `@static` resolves this at lowering.
+    @static if isempty(VERSION.prerelease)
+        using JET
 
-    JET.test_package(cAIC; target_modules=(cAIC, cAIC.MMInternals, cAIC.Numerics))
+        JET.test_package(cAIC; target_modules=(cAIC, cAIC.MMInternals, cAIC.Numerics))
+    else
+        @info "Skipping JET static analysis on prerelease Julia $(VERSION)"
+    end
 end

@@ -36,12 +36,12 @@ deps/src/
 docs/build/
 docs/site/
 
-# Per-environment Manifest files.
-# NOTE: this package commits its top-level Manifest.toml on purpose
-# (exact MixedModels pin — see CLAUDE.md §3), so it is force-unignored below.
-# Manifests in sub-environments (docs/, test/, benchmarks/) stay ignored.
+# Manifest files — none are committed (top-level or sub-environment).
+# The exact `MixedModels = "=X.Y.Z"` compat pin in Project.toml is the
+# reproducibility guarantee; a committed Manifest cannot serve the
+# 1.10/1.11/nightly CI matrix, since stdlib JLLs are bundled differently per
+# Julia version. See docs/adr/0004-no-committed-manifest.md.
 **/Manifest.toml
-!/Manifest.toml
 
 # ──────────────────────────────────────────────────────────────
 # R

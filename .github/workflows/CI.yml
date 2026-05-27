@@ -35,7 +35,9 @@ jobs:
           end
 
   # Gates 2 & 3 — JET static analysis and the full test suite (Aqua + @inferred +
-  # smoke), both run inside `Pkg.test` across the support matrix. No R required.
+  # smoke), run inside `Pkg.test`. No R required. JET runs on the released versions
+  # only: no JET release supports prerelease Julia, so on `nightly` it is dropped
+  # from the test env here and the JET test-item self-skips (see test/quality_tests.jl).
   test:
     name: Test - Julia ${{ matrix.version }}
     runs-on: ubuntu-latest
@@ -50,5 +52,16 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
+      - name: Drop JET from the test env on prerelease Julia
+        if: ${{ matrix.version == 'nightly' }}
+        shell: julia --color=yes {0}
+        run: |
+          using TOML
+          path = joinpath("test", "Project.toml")
+          proj = TOML.parsefile(path)
+          haskey(proj, "deps") && delete!(proj["deps"], "JET")
+          haskey(proj, "compat") && delete!(proj["compat"], "JET")
+          open(io -> TOML.print(io, proj; sorted=true), path, "w")
+          @info "Removed JET from $(path) — no JET release supports this Julia"
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1

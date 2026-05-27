@@ -68,8 +68,13 @@ case. If a change conflicts with one of these, the change is wrong.
 deliberate project decision). To keep that dependency survivable:
 
 - **Exact version pin.** `MixedModels` MUST be pinned to an exact version in
-  `[compat]` (e.g. `MixedModels = "=X.Y.Z"`), and `Manifest.toml` MUST be
-  committed. A version bump is a deliberate, reviewed event — never incidental.
+  `[compat]` (e.g. `MixedModels = "=X.Y.Z"`) in *both* `Project.toml` and
+  `test/Project.toml`. That exact pin — not a committed `Manifest.toml` — is the
+  reproducibility guarantee: a version bump is a deliberate, reviewed event, never
+  incidental. `Manifest.toml` is **not** committed (it cannot serve the
+  `1.10`/`1.11`/`nightly` CI matrix — stdlib JLLs are bundled differently per Julia
+  version, so a manifest resolved on one version fails to instantiate on another).
+  See [ADR-0004](docs/adr/0004-no-committed-manifest.md).
 
 - **Single quarantine file.** *All* access to `MixedModels.jl` internal fields
   and unexported functions MUST live in `src/mm_internals.jl`. This is **not** an
@@ -224,7 +229,9 @@ A change is **not done** until, in this order:
 
 1. **Format** — `JuliaFormatter` check passes (no diff).
 2. **Static analysis** — `JET.jl` reports no errors and no unexpected type
-   instabilities in numerical paths (`@report_opt` / `@report_call`).
+   instabilities in numerical paths (`@report_opt` / `@report_call`). JET runs on
+   the released Julia versions only; it is skipped on prerelease/`nightly`, where
+   no JET release tracks the unstable compiler internals it depends on.
 3. **Tests** — full `Pkg.test()` green, including `@inferred` type-stability
    assertions and `Aqua.jl`.
 
@@ -314,8 +321,9 @@ either fix `cAIC.jl` or record a justified deviation in `DECISIONS.md`.
 - **Do not** access `MixedModels.jl` internals from any file other than
   `src/mm_internals.jl`, and not at all unless listed in its internal-access
   table.
-- **Do not** bump the `MixedModels` version without walking the internal-access
-  table and reviewing the `Manifest.toml` diff.
+- **Do not** bump the `MixedModels` exact-version pin (in `Project.toml` *and*
+  `test/Project.toml`) without walking the internal-access table and reviewing the
+  resulting resolved-dependency changes.
 - **Do not** loosen a tolerance to make a test pass. Investigate the divergence.
 - **Do not** make finite differences a default or silent derivative anywhere an
   analytic or `ForwardDiff` form exists. Shipped FD is allowed *only* as an
