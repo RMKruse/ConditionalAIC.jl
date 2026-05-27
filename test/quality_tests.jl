@@ -17,7 +17,12 @@ end
         JET.test_package(
             cAIC;
             target_modules=(
-                cAIC, cAIC.MMInternals, cAIC.Numerics, cAIC.Loglik, cAIC.DofLMM
+                cAIC,
+                cAIC.MMInternals,
+                cAIC.Numerics,
+                cAIC.Loglik,
+                cAIC.DofLMM,
+                cAIC.Components,
             ),
         )
     else

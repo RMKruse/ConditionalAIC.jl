@@ -6,6 +6,32 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-27 — Level-2 tolerance for the analytic Gaussian cAIC: `atol = 1e-3`
+
+**Status:** accepted (measured). Applies to `caic` with `method=:steinian`, `hessian=:analytic`
+(issue #8). The pending-validation status of the closed-form/analytic path is hereby resolved.
+
+The Level-2 end-to-end comparison fits the same model in `lme4` and `MixedModels.jl` and checks
+`cAIC.caic` against `cAIC4`'s public `cAIC()` (reference frozen in `test/fixtures/caic_level2.h5`,
+cAIC4 1.1 / lme4 2.0.1). Four cases: `sleepstudy` correlated intercept+slope and random-intercept-
+only, each ML and REML, REML pinned on both sides (per the REML/ML entry below).
+
+**Derivation.** The two packages minimise the *same* marginal (restricted) objective and agree on
+it to **≤ 2.5e-8** across all four cases — i.e. both reach the same optimum. But the optimisers
+settle at slightly different `θ̂`: up to `‖Δθ̂‖∞ ≈ 4e-5` (slope, ML), because the objective is
+locally flat there (that 4e-5 shift moves the objective by only ~2.5e-8). The cAIC is evaluated
+*at* `θ̂` and is **not** stationary in `θ`, so the same `Δθ̂` maps to a first-order
+`Δcaic ≈ ‖∇_θ cAIC‖·‖Δθ̂‖`. Observed worst case (slope, ML): `|Δcaic| = 2.96e-4`, `|Δdf| = 3.1e-4`,
+`|Δcll| = 4.6e-4`. The intercept cases, where `θ̂` matches to ~1e-9, agree to ~1e-8 — a near-exact
+machinery anchor confirming the discrepancy is fit-induced, not a math error.
+
+**Tolerance.** `atol = 1e-3` on `caic`, `df` (ρ), and `condloglik`, ≈3× the worst observed
+fit-induced discrepancy. It is not a loosened tolerance (CLAUDE §10): a genuine machinery error
+moves the penalty `2ρ` in sub-degree-of-freedom units, i.e. `Δcaic ≥ O(0.1)`, an order of magnitude
+outside this band, so the gate still discriminates correctness from optimiser noise.
+
+---
+
 ## 2026-05-27 — FD-sourced Greven–Kneib Hessian B does not bit-match `cAIC4` `analytic=FALSE`
 
 **Status:** pending validation — tolerance to be measured and recorded once Level-2
