@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  # CI deactivated: automatic push/pull_request triggers are disabled.
+  # Re-enable by uncommenting the two blocks below.
+  # push:
+  #   branches: [main]
+  #   tags: ['*']
+  # pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # Gate 1 — formatting (JuliaFormatter, Blue style). Version-independent, one job.
+  format:
+    name: Format (JuliaFormatter / Blue)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Check Blue-style formatting
+        shell: julia --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.activate(; temp=true)
+          Pkg.add(PackageSpec(name="JuliaFormatter", version="2.4.0"))
+          using JuliaFormatter
+          if !format("."; verbose=true)
+              @error "Not formatted to the Blue style. Run JuliaFormatter.format(\".\") and commit."
+              exit(1)
+          end
+
+  # Gates 2 & 3 — JET static analysis and the full test suite (Aqua + @inferred +
+  # smoke), run inside `Pkg.test`. No R required. JET runs on the released versions
+  # only: no JET release supports prerelease Julia, so on `nightly` it is dropped
+  # from the test env here and the JET test-item self-skips (see test/quality_tests.jl).
+  test:
+    name: Test - Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.version == 'nightly' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.10', '1.11', 'nightly']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - name: Drop JET from the test env on prerelease Julia
+        if: ${{ matrix.version == 'nightly' }}
+        shell: julia --color=yes {0}
+        run: |
+          using TOML
+          path = joinpath("test", "Project.toml")
+          proj = TOML.parsefile(path)
+          haskey(proj, "deps") && delete!(proj["deps"], "JET")
+          haskey(proj, "compat") && delete!(proj["compat"], "JET")
+          open(io -> TOML.print(io, proj; sorted=true), path, "w")
+          @info "Removed JET from $(path) — no JET release supports this Julia"
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
