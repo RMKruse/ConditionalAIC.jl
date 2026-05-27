@@ -69,4 +69,4 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 
 | Aspect | `cAIC.jl` | Status | Notes |
 |--------|-----------|--------|-------|
-| objective used for θ̂, b̂, B | compute on the fit as-is; dispatch on `m.optsum.REML` | 🟢 | No force-refit. Defaults differ from lme4 (MM defaults ML); fixtures pin REML on both sides (DECISIONS). Both ML and REML Level-2-validated (#8). |
+| objective used for θ̂, b̂, B | compute on the fit as-is; dispatch on `m.optsum.REML` | 🟢 | No force-refit. Defaults differ from lme4 (MM defaults ML); fixtures pin REML on both sides (DECISIONS). Both ML and REML Level-2-validated against `cAIC4` (#8); the objective dispatch, the no-force-refit guarantee, and REML-path type-stability are pinned by focused behavioural specs (#9). |

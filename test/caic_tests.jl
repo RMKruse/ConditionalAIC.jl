@@ -183,6 +183,82 @@ end
     @test r isa CAICResult{Float64}
 end
 
+@testitem "caic dispatches on the fit's REML flag (objective dispatch, no force-refit)" tags = [
+    :level2
+] begin
+    # The defining behaviour of #9: `caic` scores the fit under the objective it was
+    # estimated with, read from `m.optsum.REML`, and never force-refits to ML. Comparing two
+    # *separate* ML and REML fits would conflate the flag with their differing θ̂; flipping
+    # only the flag on a *single* fit isolates the dispatch — every component (e, A, V₀⁻¹,
+    # Wⱼ, …) is built from the frozen θ̂, so the score may move only through the objective
+    # branch (ρ's nθ = n vs n−p, and σ̂'s denominator in the conditional log-lik). Both must
+    # respond; a regression that ignored the flag (e.g. always ML) would leave them identical.
+    using MixedModels
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+
+    θ̂ = copy(m.θ)
+    r_ml = caic(m)                 # scored as the ML fit it is
+    m.optsum.REML = true           # flip ONLY the objective flag — do not refit
+    r_reml = caic(m)
+    m.optsum.REML = false          # restore before asserting (a failed @test won't skip this)
+
+    @test m.θ == θ̂                 # θ̂ frozen across the flip: the flag alone moved
+    @test r_reml.dof != r_ml.dof   # the Greven–Kneib branch (nθ) responds to the flag
+    @test r_reml.caic != r_ml.caic # end-to-end the conditional AIC responds to the flag
+end
+
+@testitem "caic computes on the fit as-is: scoring leaves the fit unmutated" tags = [
+    :level2
+] begin
+    # The "no force-refit" guarantee (#9, DECISIONS 2026-05-27): `caic` reads the fitted
+    # quantities and must not refit or otherwise mutate the model — in particular it must not
+    # flip a REML fit to ML to score it. Observable contract: the REML flag and θ̂ are
+    # byte-identical before and after scoring.
+    using MixedModels
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=true,
+        progress=false,
+    )
+
+    flag_before, θ̂_before = m.optsum.REML, copy(m.θ)
+    caic(m)
+    @test m.optsum.REML == flag_before    # objective not forced to ML
+    @test m.θ == θ̂_before                 # fit not re-optimised
+end
+
+@testitem "caic is type-stable on the REML path" tags = [:level2] begin
+    # Type stability is a defect gate (CLAUDE §4) and must hold on both objective branches,
+    # not only the ML one exercised above. `@inferred` asserts `caic` on a REML fit still
+    # resolves to a concrete `CAICResult{Float64,…}` with no Any/Union fallback from the
+    # `isREML` dispatch.
+    using MixedModels
+    using cAIC: caic, CAICResult
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=true,
+        progress=false,
+    )
+    scoreit(model) = caic(model)
+    r = @inferred scoreit(m)
+    @test r isa CAICResult{Float64}
+end
+
 @testitem "caic matches cAIC4 end-to-end on Gaussian LMMs (Level-2)" tags = [:level2] begin
     # The correctness gate (CLAUDE §6 Level-2): fit the same models `MixedModels.jl` and
     # `lme4` agree on, and reproduce the conditional AIC that `cAIC4`'s public `cAIC()`
