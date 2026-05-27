@@ -250,9 +250,14 @@ CI enforces all three. Local pre-commit should run at least 1 and 3.
 - **Singular fits** (covariance factor `λ` with zeros on the diagonal) are a
   first-class case, not an error to paper over. Detect, handle, and document the
   behavior; match what `cAIC4` does.
-- **Analytic derivatives** are preferred. Where an analytic gradient is
-  impractical, use `ForwardDiff.jl`. **Finite differences are permitted only as a
-  cross-check in tests**, never in the shipped computation.
+- **Analytic derivatives** are preferred. Where an analytic derivative is
+  impractical, use `ForwardDiff.jl`. **Finite differences are a *constrained*
+  technique, not a banned one (ADR-0001):** in shipped code they are permitted
+  *only* as an explicitly opt-in, documented, tolerance-justified path (e.g. a
+  fallback when AD fails on an upstream object), and **never** the default where an
+  analytic or `ForwardDiff` derivative exists. FD remains the standard form for
+  test-time cross-checks; every shipped FD path carries a justified tolerance in
+  `DECISIONS.md`.
 - Guard the obvious edge cases: empty inputs, `NaN`/`Inf`, non-positive values
   where positivity is required, `θ` on the boundary.
 
@@ -287,6 +292,12 @@ either fix `cAIC.jl` or record a justified deviation in `DECISIONS.md`.
 - **M3 — GLMM.** Non-Gaussian families; the refitting / numerical-approximation
   path. The expensive milestone — make refitting cheap (reuse factorizations).
 - **M4 — `stepcAIC`.** Conditional stepwise selection on top of M2/M3.
+- **M4.5 — Model averaging.** cAIC-weighted model averaging (`cAIC4`'s `modelAvg` /
+  `predictMA` / `summaryMA`, with the `getWeights` / `weightOptim` weight machinery).
+  Combines candidate models into one weighted prediction rather than selecting a single
+  model; layers on M2/M3 scoring and M4's multi-model infrastructure. *Added 2026-05-27 —
+  absent from the original plan; surfaced from the `cAIC4` `NAMESPACE` and folded into the
+  parity goal as its own milestone.*
 - **M5 — Additive models** (`gamm4` equivalent). Highest open risk: no direct
   Julia analogue; scope is decided deliberately and late, recorded in
   `DECISIONS.md`.
@@ -306,8 +317,10 @@ either fix `cAIC.jl` or record a justified deviation in `DECISIONS.md`.
 - **Do not** bump the `MixedModels` version without walking the internal-access
   table and reviewing the `Manifest.toml` diff.
 - **Do not** loosen a tolerance to make a test pass. Investigate the divergence.
-- **Do not** use finite differences in shipped code — analytic or `ForwardDiff`
-  only; finite differences are a test-time cross-check.
+- **Do not** make finite differences a default or silent derivative anywhere an
+  analytic or `ForwardDiff` form exists. Shipped FD is allowed *only* as an
+  explicitly opt-in, documented, tolerance-justified path (ADR-0001) — never the
+  primary estimator, never undocumented.
 - **Do not** write Python-in-Julia: type-unstable code, abstractly-typed struct
   fields, manual loops where a clear vectorized form exists, unnecessary
   allocations in kernels.
