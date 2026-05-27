@@ -14,7 +14,17 @@ end
     @static if isempty(VERSION.prerelease)
         using JET
 
-        JET.test_package(cAIC; target_modules=(cAIC, cAIC.MMInternals, cAIC.Numerics))
+        JET.test_package(
+            cAIC;
+            target_modules=(
+                cAIC,
+                cAIC.MMInternals,
+                cAIC.Numerics,
+                cAIC.Loglik,
+                cAIC.DofLMM,
+                cAIC.Components,
+            ),
+        )
     else
         @info "Skipping JET static analysis on prerelease Julia $(VERSION)"
     end

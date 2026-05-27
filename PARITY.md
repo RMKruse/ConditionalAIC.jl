@@ -35,20 +35,20 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 
 | `cAIC4` | `cAIC.jl` | Milestone | Status | Notes |
 |---------|-----------|-----------|--------|-------|
-| `cAIC(object, method, B, sigma.penalty, analytic)` | `caic(m; method, hessian, nboot, sigmapenalty)` | M2 (Gaussian) | 🟦 | Signature locked. Renamed `cAIC`→`caic` (collides with module name). `analytic` → `hessian::Symbol`; `method=NULL` → `method=:auto`. |
+| `cAIC(object, method, B, sigma.penalty, analytic)` | `caic(m; method, hessian, nboot, sigmapenalty)` | M2 (Gaussian) | 🟢 | Gaussian `method=:auto/:steinian`, `hessian=:analytic` path implemented and Level-2-validated vs `cAIC4` (#8; atol=1e-3, DECISIONS). Renamed `cAIC`→`caic` (collides with module name). `:bootstrap`/`:forwarddiff`/`:finitediff` parse but error not-yet-implemented. |
 | — (same, GLMM dispatch) | `caic(m::GeneralizedLinearMixedModel; …)` | M3 | ⬜ | Family coverage ungrilled. |
 | `anocAIC(...)` (compare a set of fits) | `anocaic(ms...)` → table | M2.5 | 🟦 | **Comparison**: rank a user-supplied fixed set. "Early, right after scoring." Spelling: `cAIC4` exports `anocAIC`; our lowercase port is `anocaic`. |
 | `stepcAIC(...)` | `stepcaic(...)` | M4 | 🟦 | **Search**: RE structure primary, FE optional. Shape resolved; details ungrilled. |
-| `getcondLL` (exported) | `CAICResult.condloglik` + accessor | M2 | 🟦 | Surfaced as a result field, not a free function. |
+| `getcondLL` (exported) | `CAICResult.condloglik` + accessor | M2 | 🟢 | Surfaced as a result field, not a free function; the conditional log-lik is Level-2-validated vs `cAIC4`'s `getcondLL` (#8). |
 | `deleteZeroComponents` (exported) | internal reduced-model path | M2 | 🟦 | `cAIC4` exports it; we fold it into the reduced-model path (drives `CAICResult.reducedmodel` + `refit`). A public Julia equivalent is optional — revisit if parity demands it. See DECISIONS (singular fits). |
-| `getModelComponents` (exported) | internal (`mm_internals.jl`) | M2 (Level-2) | 🟦 | The fit→components bridge; carries the θ-parametrization, so it is exercised at Level-2, not Level-1 (ADR-0003). |
+| `getModelComponents` (exported) | internal (`Components` + `mm_internals.jl`) | M2 (Level-2) | 🟢 | The fit→components bridge; carries the θ-parametrization, so it is exercised at Level-2, not Level-1 (ADR-0003). Validated end-to-end through `caic` vs `cAIC4` (#8). |
 | `modelAvg` / `predictMA` / `summaryMA` (+ internal `getWeights` / `weightOptim`) | (API TBD at M4.5) | M4.5 | 🟦 | **Averaging**: cAIC-weighted model combination. In the parity goal as its own milestone M4.5 (CLAUDE.md §11, amended 2026-05-27). API ungrilled. |
 
 ## Model families
 
 | Family | `cAIC4` df route | `cAIC.jl` milestone | Status | Notes |
 |--------|------------------|---------------------|--------|-------|
-| Gaussian LMM | steinian (analytic Greven–Kneib) | M2 | 🟦 | The core; full GK bias correction. |
+| Gaussian LMM | steinian (analytic Greven–Kneib) | M2 | 🟢 | The core; full GK bias correction. Level-1 df arithmetic (`calculateGaussianBc` → `dof_lmm`) validated against `cAIC4` v1.1 via the HDF5 fixture pipeline (#7); full `caic` assembly Level-2-validated end-to-end vs `cAIC4`/`lme4` on `sleepstudy` (ML+REML, slope+intercept), atol=1e-3 (#8, DECISIONS). |
 | Poisson GLMM | steinian | M3 | ⬜ | Analytic Stein route; refitting cost ungrilled. |
 | Bernoulli / binomial GLMM | steinian | M3 | ⬜ | Analytic Stein route. |
 | other GLMM families | conditional bootstrap | M3 | ⬜ | Bootstrap fallback (Efron). |
@@ -58,15 +58,15 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 
 | `cAIC4` | `cAIC.jl` | Status | Notes |
 |---------|-----------|--------|-------|
-| `method=NULL` (auto by family) | `method=:auto` | 🟦 | `:steinian` for gaussian/poisson/bernoulli, else `:bootstrap`. |
-| steinian | `method=:steinian` | 🟦 (M2 Gaussian) | Analytic GK; Level-1 tolerance. |
+| `method=NULL` (auto by family) | `method=:auto` | 🟢 (Gaussian) | Resolves to `:steinian` for Gaussian (validated #8); `:bootstrap` fallback for other families is M3. |
+| steinian | `method=:steinian` | 🟢 (M2 Gaussian) | Analytic GK; Level-1 df tolerance + Level-2 end-to-end (#8). |
 | `conditionalBootstrap` | `method=:bootstrap` | 🟦 (design) | Validated by isolation + analytic cross-check, not bit-match (DECISIONS). `rng` arg for reproducibility. |
-| `analytic=TRUE` (closed-form B) | `hessian=:analytic` | 🟦 | Default B-source; no derivative dependency. |
+| `analytic=TRUE` (closed-form B) | `hessian=:analytic` | 🟢 | Default B-source; no derivative dependency. Level-2-validated (#8). |
 | `analytic=FALSE` (lifted lme4 Hessian) | `hessian=:forwarddiff` / `:finitediff` | 🟦 | No lme4 Hessian to lift in MM; B computed at cAIC-time. No bit-match to `analytic=FALSE` (DECISIONS + ADR-0001). |
-| `sigma.penalty` | `sigmapenalty::Int` | 🟦 | Carried through unchanged. |
+| `sigma.penalty` | `sigmapenalty::Int` | 🟢 | Carried through unchanged; verified to shift ρ by one per unit (#8). |
 
 ## REML / ML
 
 | Aspect | `cAIC.jl` | Status | Notes |
 |--------|-----------|--------|-------|
-| objective used for θ̂, b̂, B | compute on the fit as-is; dispatch on `m.optsum.REML` | 🟦 | No force-refit. Defaults differ from lme4 (MM defaults ML); fixtures pin REML on both sides (DECISIONS). |
+| objective used for θ̂, b̂, B | compute on the fit as-is; dispatch on `m.optsum.REML` | 🟢 | No force-refit. Defaults differ from lme4 (MM defaults ML); fixtures pin REML on both sides (DECISIONS). Both ML and REML Level-2-validated (#8). |

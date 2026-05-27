@@ -7,6 +7,10 @@ on:
   #   branches: [main]
   #   tags: ['*']
   # pull_request:
+  # Weekly fixture-rot guard. Deactivated alongside the rest of CI; re-enable with the
+  # rest. The job also runs on manual dispatch.
+  # schedule:
+  #   - cron: '0 4 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -67,3 +71,39 @@ jobs:
           @info "Removed JET from $(path) — no JET release supports this Julia"
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+
+  # Gated live-R re-validation (CLAUDE §6 / issue #7). Separate from the default job:
+  # it stands up R, regenerates the Level-1 components, recomputes the reference ρ with
+  # live cAIC4, and re-validates `dof_lmm` against it — catching fixture rot. Gated by
+  # `CAIC_LIVE_RCALL=1`; runs only on schedule/dispatch, never in the default no-R path.
+  # The R HDF5 reader is `rhdf5` (bundles its own HDF5 via Rhdf5lib); see ADR-0003.
+  live-rcall:
+    name: Live R re-validation (cAIC4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+      - name: Install rhdf5 (bundles HDF5 via Rhdf5lib)
+        shell: Rscript {0}
+        run: |
+          if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+          BiocManager::install("rhdf5", update = FALSE, ask = FALSE)
+      - name: Fetch the pinned cAIC4 v1.1 source (ground truth)
+        run: |
+          set -e
+          ver=1.1
+          base=https://cran.r-project.org/src/contrib
+          curl -fsSL "$base/cAIC4_${ver}.tar.gz" -o /tmp/cAIC4.tar.gz \
+            || curl -fsSL "$base/Archive/cAIC4/cAIC4_${ver}.tar.gz" -o /tmp/cAIC4.tar.gz
+          mkdir -p /tmp/caic4 && tar -xzf /tmp/cAIC4.tar.gz -C /tmp/caic4
+          echo "CAIC4_SRC=/tmp/caic4/cAIC4" >> "$GITHUB_ENV"
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-runtest@v1
+        env:
+          CAIC_LIVE_RCALL: '1'
