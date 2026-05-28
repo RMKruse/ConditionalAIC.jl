@@ -1,10 +1,11 @@
 @testitem "Aqua quality assurance" begin
     using Aqua
 
-    # LinearAlgebra and LogExpFunctions are now exercised by the `Numerics` primitives.
-    # Statistics is declared ahead of use (later slices); ForwardDiff/FiniteDiff back the
-    # M2 Hessian B-sources (ADR-0002) and are intentionally present-but-unused for now.
-    Aqua.test_all(cAIC; stale_deps=(ignore=[:Statistics, :ForwardDiff, :FiniteDiff],))
+    # LinearAlgebra and LogExpFunctions are now exercised by the `Numerics` primitives;
+    # ForwardDiff/FiniteDiff back the M2 numeric Hessian B-sources, now wired through
+    # `mm_internals.jl`'s `bhessian` (ADR-0002, #11), so they are no longer stale.
+    # Statistics is declared ahead of use (later slices).
+    Aqua.test_all(cAIC; stale_deps=(ignore=[:Statistics],))
 end
 
 @testitem "JET static analysis" begin

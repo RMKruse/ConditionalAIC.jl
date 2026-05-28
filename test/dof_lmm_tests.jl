@@ -45,6 +45,57 @@
     end
 end
 
+@testitem "dof_lmm_numeric reproduces calculateGaussianBc(analytic=FALSE) on Level-1 components" tags = [
+    :level1
+] begin
+    # Level-1 correctness gate for the *numeric* B-source assembly (issue #11). The numeric
+    # path (`analytic = FALSE`) takes the Hessian **B** externally (here the synthetic SPD
+    # fixture B), rebuilds the rescaled cross-product `C`, and runs the *same* ρ assembly.
+    # For every synthetic component set, `dof_lmm_numeric` must reproduce the ρ that
+    # `cAIC4::calculateGaussianBc(analytic = FALSE)` computed from the *identical*
+    # components **and the identical B** (written to the fixture by `generate_fixtures.R`).
+    # This isolates the assembly arithmetic from how B is obtained, which differs per source.
+    using HDF5
+    using cAIC: DofLMM
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    fixture = joinpath(@__DIR__, "fixtures", "dof_lmm_level1.h5")
+    @test isfile(fixture)
+
+    h5open(fixture, "r") do f
+        cases = filter(!=("meta"), keys(f))
+        @test !isempty(cases)
+        for name in cases
+            g = f[name]
+            haskey(g, "rho_ref_numeric") || error(
+                "fixture case `$name` has no rho_ref_numeric — run generate_fixtures.R"
+            )
+
+            n = read(g["n"])::Int
+            p = read(g["p"])::Int
+            s = read(g["s"])::Int
+            comps = DofLMM.GaussianComponents(
+                zeros(Float64, n, p),
+                read(g["e"]),
+                read(g["A"]),
+                read(g["V0inv"]),
+                [read(g["Wlist"]["W$j"]) for j in 1:s],
+                read(g["eWelist"]),
+                read(g["tye"]),
+                Bool(read(g["isREML"])),
+            )
+            B = read(g["B"])
+            ρ = DofLMM.dof_lmm_numeric(
+                comps, B; sigmapenalty=asscalar(read(g["sigma_penalty"]))
+            )
+            ρ_ref = asscalar(read(g["rho_ref_numeric"]))
+
+            @test ρ ≈ ρ_ref rtol = 1e-6 atol = 1e-10
+        end
+    end
+end
+
 @testitem "live R re-validation against cAIC4 (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin
@@ -131,16 +182,30 @@ end
         )
     end
 
-    # Type stability via @inferred, for both objectives and both float widths.
+    # A small SPD Hessian B for the numeric path (s = 1 here): `b > 0` is positive-definite.
+    spdB(::Type{T}, c) where {T} =
+        Matrix{T}(reshape([T(3)], length(c.Wlist), length(c.Wlist)))
+
+    # Type stability via @inferred, for both objectives and both float widths — both the
+    # analytic (`dof_lmm`) and numeric (`dof_lmm_numeric`) entry points.
     for isREML in (false, true)
         c64 = tinycomps(Float64; isREML)
         @test (@inferred DofLMM.dof_lmm(c64)) isa Float64
+        @test (@inferred DofLMM.dof_lmm_numeric(c64, spdB(Float64, c64))) isa Float64
 
         c32 = tinycomps(Float32; isREML)
         ρ32 = @inferred DofLMM.dof_lmm(c32)
         @test ρ32 isa Float32
         @test ρ32 ≈ DofLMM.dof_lmm(c64) rtol = 1e-4   # tracks Float64 to single precision
+
+        ρ32num = @inferred DofLMM.dof_lmm_numeric(c32, spdB(Float32, c32))
+        @test ρ32num isa Float32
+        @test ρ32num ≈ DofLMM.dof_lmm_numeric(c64, spdB(Float64, c64)) rtol = 1e-4
     end
+
+    # The numeric path validates B's shape: a B that is not s×s raises ArgumentError.
+    cnum = tinycomps(Float64)
+    @test_throws ArgumentError DofLMM.dof_lmm_numeric(cnum, Matrix{Float64}(I, 2, 2))
 
     # Shape-inconsistent components must raise ArgumentError, never a silently-wrong ρ.
     c = tinycomps(Float64)
@@ -160,5 +225,96 @@ end
     )
     @test_throws ArgumentError DofLMM.GaussianComponents(
         c.X, c.e, c.A, c.V0inv, c.Wlist, [c.eWelist; 0.0], c.tye, false
+    )
+end
+
+@testitem "efron_penalty reproduces cAIC4's conditionalBootstrap arithmetic on shared Y*/Ŷ*" tags = [
+    :level1, :bootstrap
+] begin
+    # Level-1 correctness gate (ADR-0003 / docs/math/0005) for the bootstrap path: for
+    # every synthetic case in the committed HDF5 fixture, `efron_penalty` must reproduce
+    # the `ρ` that `cAIC4`'s `conditionalBootstrap` arithmetic computed from the *identical*
+    # `(yhat, sigma, Y*, Ŷ*)` (written into the fixture by `generate_fixtures_bootstrap.R`).
+    # No R in this job — the reference ρ is read straight from the committed fixture.
+    # Tolerance per CLAUDE §6 (Level-1: rtol = 1e-6, atol = 1e-10).
+    using HDF5
+    using cAIC: DofLMM
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    fixture = joinpath(@__DIR__, "fixtures", "bootstrap_level1.h5")
+    @test isfile(fixture)
+
+    h5open(fixture, "r") do f
+        cases = filter(!=("meta"), keys(f))
+        @test !isempty(cases)
+        for name in cases
+            g = f[name]
+            haskey(g, "rho_ref") || error(
+                "fixture case `$name` has no rho_ref — run generate_fixtures_bootstrap.R"
+            )
+
+            yhat = read(g["yhat"])
+            sigma = asscalar(read(g["sigma"]))
+            Ystar = read(g["Ystar"])
+            Yhatstar = read(g["Yhatstar"])
+            # sigmapenalty = 0: the cAIC4 `conditionalBootstrap` arithmetic itself does
+            # *not* add any σ²-parameter count (`R/bcMer.R` routes `sigma.penalty` only
+            # to the analytic path). The package's bootstrap *spine* adds it explicitly.
+            ρ = DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0)
+            ρ_ref = asscalar(read(g["rho_ref"]))
+
+            @test ρ ≈ ρ_ref rtol = 1e-6 atol = 1e-10
+        end
+    end
+end
+
+@testitem "efron_penalty: arithmetic, type stability, and validation" tags = [
+    :level1, :bootstrap
+] begin
+    # Level-1 isolation test for efron_penalty (issue #12, ADR-0003). The cAIC4
+    # `conditionalBootstrap` arithmetic is tested with a hand-computable synthetic
+    # example, type-stability checked at Float32/Float64, and the validation guards
+    # are exercised. The shared-input cAIC4-parity test (above) covers parity against
+    # cAIC4's reference; this test covers the formula, types, and guards in isolation.
+    using cAIC: DofLMM
+
+    # Hand-computed synthetic: n=2, B=2, sigma=1, sigmapenalty=0; `yhat` does not enter
+    # the formula (carried for signature symmetry — see efron_penalty docstring).
+    #   Ystar    = [0 2; 0 2]   →  rowmean = [1, 1]
+    #   centered = [-1 1; -1 1]
+    #   Yhatstar = [0 1; 0 1]
+    #   Σ_b Yhatstar[:,b] · centered[:,b]  =  (0·-1 + 0·-1) + (1·1 + 1·1)  =  2
+    #   ρ = 2 / ((B−1) · σ²) + sigmapenalty  =  2 / (1 · 1) + 0  =  2.0
+    yhat = [10.0, 20.0]                      # arbitrary; unused arithmetically
+    sigma = 1.0
+    Ystar = Float64[0 2; 0 2]
+    Yhatstar = Float64[0 1; 0 1]
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0) ≈ 2.0
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 1) ≈ 3.0
+    # Default sigmapenalty = 0 matches cAIC4's bare arithmetic.
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar) ≈ 2.0
+
+    # Type stability over Float64 and Float32
+    Ystar32 = Float32[0 2; 0 2]
+    Yhatstar32 = Float32[0 1; 0 1]
+    @test (@inferred DofLMM.efron_penalty(Float64[10, 20], 1.0, Ystar, Yhatstar, 0)) isa
+        Float64
+    @test (@inferred DofLMM.efron_penalty(
+        Float32[10, 20], 1.0f0, Ystar32, Yhatstar32, 0
+    )) isa Float32
+
+    # Validation
+    @test_throws DomainError DofLMM.efron_penalty([1.0, 2.0], 0.0, Ystar, Yhatstar, 0)
+    @test_throws ArgumentError DofLMM.efron_penalty([1.0, 2.0], 1.0, Ystar, Yhatstar, -1)
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, Float64[0 2; 0 2; 0 4], Float64[0 1; 0 1; 0 2], 0
+    )
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, Ystar, Float64[0 1; 0 1; 0 2], 0
+    )
+    # B = 1 must fail loudly (cAIC4's (B−1) divisor): no silently-divide-by-zero.
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), 0
     )
 end

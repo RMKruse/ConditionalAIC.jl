@@ -76,6 +76,37 @@ was-refitted flag (mirroring `cAIC4`).
 > **Statistician:** "No. First we must *score* a single model — compute its conditional AIC. Selection
 > (`stepcAIC`) is a search layer on top that scores candidates and compares them. Scoring comes first."
 
+**Chen-Stein correction** (Poisson GLMM df):
+The bias-corrected effective df for a Poisson GLMM. For each non-zero observation i, the model
+is refit with y_i set to zero; the df contribution is y_i × Δη̂_i. Requires n − #{y=0} refits.
+The `method=:steinian` route for Poisson in `cAIC4` (`biasCorrectionPoisson`).
+_Avoid_: calling it "analytic Greven-Kneib" — it has no closed-form hat matrix; it is influence-based.
+
+**Efron's estimator** (Bernoulli GLMM df):
+The bias-corrected effective df for a Bernoulli GLMM. For each observation i, the model is refit
+with y_i flipped (0→1 or 1→0); the df contribution is μ̂_i(1−μ̂_i) × sign_i × Δlogit_i.
+Requires n refits.
+The `method=:steinian` route for Bernoulli in `cAIC4` (`biasCorrectionBernoulli`).
+_Avoid_: conflating with the Gaussian Efron bootstrap penalty (a different formula in M2).
+
+**Conditional simulation** (GLMM bootstrap):
+Sampling from the conditional distribution f(y | b̂) by drawing y_i ~ f(μ̂_i) directly, where
+μ̂_i = linkinv(η̂_i) is the fitted conditional mean. Used in the GLMM conditional bootstrap.
+Does *not* use `MixedModels.simulate!` (which draws new random effects = marginal simulation).
+See ADR-0005.
+_Avoid_: "simulate from the model" — MixedModels.jl's `simulate!` is marginal, not conditional.
+
+**Full-singularity fallback** (GLMM):
+When all GLMM variance components are on the boundary (all θ = 0), the model reduces to a
+plain GLM. The effective df is rank(X) with no sigma penalty. Matches `cAIC4`'s
+`deleteZeroComponents` → `glm` path which returns `zeroLessModel$rank`.
+_Avoid_: confusing with the Gaussian all-singular path, which does add `sigmapenalty`.
+
+**Partial-singularity reduction** (GLMM):
+When some but not all GLMM variance components are on the boundary. The zero components are
+removed and the model is refit on the reduced parameter space — the GLMM analogue of the LMM
+`reduceboundary` function.
+
 ## Flagged ambiguities
 
 - "the best model from among several" (aim statement) conflated **Scoring** with **Selection**,

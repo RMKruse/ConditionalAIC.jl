@@ -18,6 +18,7 @@ and `Λ̂ʸ = B⁻¹C` is a factorisation-based solve with no explicit inverse (
 module DofLMM
 
 using LinearAlgebra: Symmetric, cholesky, dot, issuccess, tr
+using Statistics: mean
 
 using ..Numerics: traceprod
 
@@ -204,6 +205,159 @@ function dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer=1) where {T}
         ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
     end
     return ρ + T(sigmapenalty)
+end
+
+"""
+    dof_lmm_numeric(c::GaussianComponents{T}, B::AbstractMatrix{T};
+                    sigmapenalty::Integer = 1) -> T
+
+The Greven–Kneib bias-corrected effective degrees of freedom ρ with an **externally
+supplied** Hessian `B` — the port of `cAIC4::calculateGaussianBc(model, sigma.penalty,
+analytic = FALSE)`. This is the assembly behind the `:forwarddiff` and `:finitediff`
+B-sources of [`caic`](@ref): the curvature `B` of the (restricted) profile log-likelihood
+is obtained numerically rather than from the closed form, and only the cross-product `C`
+and the final ρ assembly are recomputed here.
+
+# Mathematical background
+
+With the notation of [`dof_lmm`](@ref) and `nθ = n` (ML) or `nθ = n − p` (REML), the
+numeric path leaves `B` external and rescales the cross-product (doc 0004 §2; cf.
+`calculateGaussianBc` lines 59–70):
+
+```math
+C_{j,:} = \\frac{2\\,n_\\theta}{t^{ye}}
+          \\left( (A W_j e)^{\\mathsf T} - \\frac{e^{\\mathsf T} W_j e}{t^{ye}}\\, e^{\\mathsf T} \\right),
+```
+
+using `eᵀWⱼA = (A Wⱼ e)ᵀ` (both `A` and `Wⱼ` symmetric). The solve `Λ̂ʸ = B⁻¹C`
+(factorisation, no inverse) and the ρ assembly
+
+```math
+\\rho = n - \\operatorname{tr}(A)
+     + \\sum_{j=1}^{s} \\hat\\Lambda^{y}_{j,:} \\cdot (A W_j e)
+     + \\texttt{sigmapenalty}
+```
+
+are **identical** to the analytic path — only the source of `B` and the scaling of `C`
+differ. `B` must be supplied on the deviance scale (−2·log-lik for ML, the REML criterion
+for REML), matching the objective the optimiser differentiates.
+
+# Arguments
+- `c`: the [`GaussianComponents`](@ref) (unweighted Gaussian path, `R = Iₙ`).
+- `B`: the `s×s` numeric Hessian of the (restricted) profile objective at `θ̂`.
+- `sigmapenalty`: number of estimated residual-variance parameters added to ρ (default `1`).
+
+# Returns
+- The scalar effective degrees of freedom `ρ::T`.
+
+# Throws
+- `ArgumentError` if `B` is not `s×s`, where `s = length(c.Wlist)`.
+"""
+function dof_lmm_numeric(
+    c::GaussianComponents{T}, B::AbstractMatrix{T}; sigmapenalty::Integer=1
+) where {T}
+    e, A, Wlist, eWe, tye = c.e, c.A, c.Wlist, c.eWelist, c.tye
+    n = length(e)
+    s = length(Wlist)
+    p = size(c.X, 2)
+    size(B) == (s, s) ||
+        throw(ArgumentError("B must be $s×$s (s = length(Wlist)); got $(size(B))"))
+
+    nθ = c.isREML ? (n - p) : n            # np in calculateGaussianBc's analytic=FALSE branch
+    AWje = [A * (W * e) for W in Wlist]    # A Wⱼ e — (A Wⱼ e)ᵀ = eᵀWⱼA; reused by C and ρ
+
+    C = Matrix{T}(undef, s, n)
+    @inbounds for j in 1:s
+        C[j, :] = (2 * nθ / tye) .* (AWje[j] .- (eWe[j] / tye) .* e)
+    end
+
+    Λy = _lambday(B, C)
+
+    ρ = T(n) - tr(A)                       # ρ₀ = n − tr(R A), unweighted R A = A
+    @inbounds for j in 1:s
+        ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
+    end
+    return ρ + T(sigmapenalty)
+end
+
+"""
+    efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty=0) -> T
+
+Efron's covariance penalty (the parametric-bootstrap effective degrees of freedom) —
+the faithful port of `cAIC4`'s `conditionalBootstrap` df estimator. A **Level-1 isolation
+unit**: pure, fit-independent, and testable without any `MixedModels` object.
+
+# Mathematical background
+
+With `n` observations, `B ≥ 2` bootstrap draws, residual standard deviation `σ̂`,
+bootstrap responses `Y*` (`n×B`) with row means `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, and
+bootstrap conditional means `Ŷ*` (`n×B`), `cAIC4`'s estimator is
+(`R/conditionalBootstrap.R` v1.1 lines 23–25; cf. `docs/math/0005` §3)
+
+```math
+\\rho = \\frac{1}{(B - 1)\\,\\hat\\sigma^{2}}
+        \\sum_{b = 1}^{B} \\sum_{i = 1}^{n}
+          \\hat y^{*}(b)_{i} \\, \\bigl(y^{*}(b)_{i} - \\bar y^{*}_{i}\\bigr)
+        + \\texttt{sigmapenalty}.
+```
+
+The centring is on the **bootstrap row mean** `ȳ*ᵢ` (not the original fit `ŷᵢ`) and
+the divisor is the **unbiased** `B − 1`, making the assembly the standard sample-
+covariance estimator of `cov(y, ŷ) / σ²`. The `yhat` argument is *unused*
+arithmetically — it is carried in the signature for symmetry with the analytic /
+numeric Level-1 units (and for caller readability), and exists to match the original
+fit's conditional mean that the spine constructs `Y*` around.
+
+Each draw `y*(b) = ŷ + σ̂ ε(b)`, `ε ~ N(0,I)` is a parametric bootstrap sample; the
+corresponding `ŷ*(b)` is the conditional mean of a fresh model fit to `y*(b)`. The
+`sigmapenalty` term is the package's σ²-parameter count, added by the spine for
+interface symmetry with the analytic path; `cAIC4`'s `conditionalBootstrap` itself
+does not add one (`R/bcMer.R` routes `sigma.penalty` only to `biasCorrectionGaussian`).
+The default here is therefore `0` — matching `cAIC4`'s bare arithmetic — and the
+Level-1 fixture compares against the same.
+
+# Arguments
+- `yhat`: the `n`-vector conditional fitted mean `ŷ` of the original fit (carried for
+  signature symmetry; unused arithmetically — see above).
+- `sigma`: the residual standard deviation `σ̂ > 0` of the original fit.
+- `Ystar`: an `n×B` matrix whose `b`-th column is `y*(b)`; `B ≥ 2`.
+- `Yhatstar`: an `n×B` matrix whose `b`-th column is `ŷ*(b)`.
+- `sigmapenalty`: non-negative integer added to the penalty (default `0` — matches
+  `cAIC4`'s arithmetic; the bootstrap *spine* adds the package's σ²-parameter count).
+
+# Returns
+- The scalar Efron penalty `ρ::T`.
+
+# Throws
+- `ArgumentError` if `Ystar` or `Yhatstar` have the wrong shape, `B < 2`, or
+  `sigmapenalty < 0`.
+- `DomainError` if `sigma ≤ 0`.
+"""
+function efron_penalty(
+    yhat::AbstractVector{T},
+    sigma::T,
+    Ystar::AbstractMatrix{T},
+    Yhatstar::AbstractMatrix{T},
+    sigmapenalty::Integer=0,
+) where {T<:AbstractFloat}
+    n = length(yhat)
+    nstar, B = size(Ystar)
+    n == nstar || throw(ArgumentError("Ystar has $nstar rows but yhat has length $n"))
+    size(Yhatstar) == (nstar, B) ||
+        throw(ArgumentError("Yhatstar shape $(size(Yhatstar)) ≠ Ystar shape ($nstar, $B)"))
+    sigma > 0 || throw(DomainError(sigma, "sigma must be positive"))
+    sigmapenalty >= 0 || throw(ArgumentError("sigmapenalty must be ≥ 0; got $sigmapenalty"))
+    B >= 2 || throw(
+        ArgumentError(
+            "B = size(Ystar, 2) must be ≥ 2 (cAIC4 uses the unbiased (B−1) divisor); got B = $B",
+        ),
+    )
+    rowmean = vec(mean(Ystar; dims=2))                 # n-vector ȳ*ᵢ
+    S = zero(T)
+    for b in 1:B
+        S += dot(view(Yhatstar, :, b), view(Ystar, :, b) .- rowmean)
+    end
+    return S / ((B - one(T)) * sigma^2) + T(sigmapenalty)
 end
 
 end # module DofLMM

@@ -32,21 +32,37 @@ outside this band, so the gate still discriminates correctness from optimiser no
 
 ---
 
-## 2026-05-27 — FD-sourced Greven–Kneib Hessian B does not bit-match `cAIC4` `analytic=FALSE`
+## 2026-05-28 — `:finitediff` Greven–Kneib Hessian B vs `cAIC4` `analytic=FALSE`: `atol = 1e-3`
 
-**Status:** pending validation — tolerance to be measured and recorded once Level-2
-numbers exist.
+**Status:** accepted (measured). Supersedes the 2026-05-27 *pending validation* note of the
+same title. Applies to `caic` with `hessian=:finitediff` (issue #11).
 
-`cAIC.jl` will expose a finite-difference source for the Greven–Kneib Hessian B (the
-analogue of `cAIC4`'s `analytic=FALSE`), permitted under the reframed §9/§12 (see
-[ADR-0001](docs/adr/0001-finite-differences-constrained-not-banned.md)). It cannot
-reproduce `cAIC4`'s `analytic=FALSE` values: `cAIC4` lifts lme4's
-Richardson-extrapolated (`deriv12`) Hessian of lme4's profiled deviance at lme4's θ̂;
-`cAIC.jl` applies a FD scheme to `MixedModels`' objective at `MixedModels`' θ̂
-(different optimiser, θ̂, FD algorithm, and possibly REML-vs-ML objective). Agreement
-is a Level-2 derived tolerance, to be measured and recorded here. The closed-form and
-`ForwardDiff` B-sources remain the validated, default path, held to the Level-1
-tolerance.
+`cAIC.jl`'s `:finitediff` B-source self-drives `FiniteDiff.finite_difference_hessian` over
+`MixedModels`' *stable* `objective!` at `MixedModels`' θ̂ (ADR-0002, ADR-0001;
+`docs/math/0004` §3b) — **not** `cAIC4`'s lifted, Richardson-extrapolated lme4 Hessian. Because
+`objective!` **re-profiles** σ²(θ), it differentiates the *same* profiled deviance lme4 stores in
+`m@optinfo$derivs$Hessian`, so `:finitediff` reproduces `cAIC4`'s `analytic = FALSE` ρ to
+finite-difference accuracy. It cannot bit-match: different optimiser, θ̂, and FD algorithm.
+
+**Derivation.** Same Level-2 fixture and four `sleepstudy` cases as the analytic entry above
+(`test/fixtures/caic_level2.h5`, key `df_numeric`/`caic_numeric`; cAIC4 1.1 / lme4 2.0.1). Measured
+`|Δρ| = |ρ_finitediff − cAIC4 analytic=FALSE|`:
+
+| case        | s | `|Δρ|`   |
+|-------------|---|----------|
+| slope_ml    | 3 | 1.37e-4  |
+| slope_reml  | 3 | 2.59e-5  |
+| int_ml      | 1 | 2.24e-7  |
+| int_reml    | 1 | 6.97e-7  |
+
+The worst case (slope_ml, s = 3) combines the central-difference truncation error with the
+lme4↔MixedModels θ̂ discrepancy (the same ~4e-5 flat-objective shift as the analytic entry); the
+s = 1 cases, where θ̂ matches to ~1e-9, agree to ~1e-7 — confirming the gap is FD-accuracy +
+fit-induced, not a math error.
+
+**Tolerance.** `atol = 1e-3` on `caic` and `df` (ρ), the *same* fit-discrepancy band as the
+analytic Level-2 gate (≈7× the worst observed 1.37e-4). Not a loosened tolerance (CLAUDE §10): a
+genuine assembly error moves `2ρ` by `≥ O(0.1)`, an order of magnitude outside this band.
 
 ---
 
@@ -70,31 +86,59 @@ pin the REML flag explicitly on both sides and cover both `REML=true` and
 
 ## 2026-05-27 — Singular fits: match cAIC4's drop-and-refit; detection + reduced refit diverge
 
-**Status:** accepted (behaviour); Level-2 tolerance pending validation.
+**Status:** accepted (behaviour and measured Level-2 tolerance, issue #10).
 
 `cAIC.jl` matches `cAIC4`'s singular-fit handling: detect the boundary (via `MixedModels`'
 `issingular`), remove the variance components on the boundary — including a *partial* term (e.g.
 a correlated random intercept+slope where only the slope variance is zero) — refit the reduced
 model, and compute the cAIC on it; `CAICResult` carries the reduced model and a was-refitted
-flag. Two unavoidable numerical divergences from `cAIC4`: (1) *which* fits are flagged singular
+flag. When *every* random-effect direction is on the boundary, no random-effects model remains,
+and the score falls back to the fixed-effects-only one (ρ = rank(FE) + sigma.penalty, the
+conditional log-likelihood of the original fit at b̂ = 0), mirroring `cAIC4`'s `lm` branch.
+
+**Level-2 validation (2026-05-28).** Reference frozen in `test/fixtures/caic_singular_level2.h5`
+(cAIC4 1.1 / lme4 2.0.1), one case per code path: `reduce_ml` — a `(1 + x | g)` fit with `x`
+constant within group, where the slope is unidentifiable and collapses to the boundary in *both*
+ecosystems (the synthetic sample is embedded in the fixture so each scores identical data); and
+`dyestuff2_{ml,reml}` — the canonical `Dyestuff2` fit whose batch variance is zero (all-boundary
+`lm` fallback). Observed worst discrepancy: `reduce_ml` `|Δcaic| ≈ 3.2e-8`, `|Δdf| ≈ 1.0e-9`,
+`|Δcll| ≈ 1.7e-8` (a `(1 | g)` refit, near-identical θ̂ across optimisers); `dyestuff2`
+`|Δcaic| ≈ 3e-11` (the fixed-effects-only score involves no boundary refit). The same derived
+`atol = 1e-3` as the non-singular Level-2 gate applies, with vast margin — a genuine machinery
+error moves the penalty `2ρ` by `≥ O(0.1)`.
+
+**Two unavoidable numerical divergences from `cAIC4`.** (1) *Which* fits are flagged singular
 differs, because `MixedModels`' `issingular` tolerance and lme4's boundary test are not
-identical; (2) the reduced-model refit differs by optimiser (MixedModels vs lme4) — a Level-2
-discrepancy. Both are documented here; the tolerance is measured once fixtures exist.
+identical; (2) the reduced-model refit differs by optimiser (MixedModels vs lme4) — the Level-2
+discrepancy quantified above.
+
+**Why the REML analogue of `reduce_ml` is omitted from the fixture.** On the same x-constant-
+within-group data fitted by REML, lme4's optimiser settles at a small but *non-zero* slope
+variance (sd ≈ 0.03, not flagged singular) where `MixedModels` lands exactly on the boundary, so
+the two ecosystems disagree on *whether* the fit is singular at all — divergence (1) above, in
+its starkest form. There is therefore no common ground-truth case to compare, and forcing one
+would mean comparing `cAIC.jl`'s reduced `(1 | g)` score against `cAIC4`'s full `(1 + x | g)`
+score — a category error, not a tolerance question. The ML construction is used precisely because
+it forces *both* optimisers onto the boundary, giving a genuine shared reference. This is the
+concrete instance of the detection divergence, recorded rather than papered over.
 
 ---
 
 ## 2026-05-27 — Conditional-bootstrap df: validated by isolation + analytic cross-check, not bit-match
 
-**Status:** accepted.
+**Status:** accepted. Superseded in part by the 2026-05-28 entry below (which makes the
+Level-1 isolation claim concrete).
 
 The conditional-bootstrap df (`method=:bootstrap`) is stochastic and cannot bit-match `cAIC4`
 across languages (independent RNGs; per-draw refits also differ by optimiser). Validation
 instead: (1) **Level-1 isolation** — the Efron covariance-penalty arithmetic is checked against
-`cAIC4`'s internal function on fixed, shared inputs at the tight Level-1 tolerance; (2)
-**internal cross-check** — for a Gaussian LMM the bootstrap df must converge to the *exact*
-analytic (steinian) df as `nboot → ∞`, which is the primary correctness gate. Any end-to-end
-comparison against `cAIC4`'s bootstrap is Monte-Carlo-tolerance only and is not a release gate.
-Bootstrap draws are reproducible via an `rng::AbstractRNG` argument.
+`cAIC4`'s internal function on fixed, shared inputs at the tight Level-1 tolerance (closed
+2026-05-28; see below); (2) **internal cross-check** — for a Gaussian LMM the bootstrap df must
+*lie inside the MC noise band of* the analytic (steinian) df at large `nboot`, **not** converge
+to it (the memory note `bootstrap-not-equal-analytic.md` documents the empirically observed
+finite gap between cAIC4's own bootstrap and its own analytic df); any end-to-end comparison
+against `cAIC4`'s bootstrap is Monte-Carlo-tolerance only and is not a release gate. Bootstrap
+draws are reproducible via an `rng::AbstractRNG` argument.
 
 ---
 
@@ -115,3 +159,131 @@ How each dependency is used differs (see ADR-0002): `:forwarddiff` calls
 **not** use `MixedModelsFiniteDiffExt`. So only the ForwardDiff path sits on experimental surface
 (shape-asserted, frozen by the `=5.5.1` pin); the FiniteDiff dependency is exercised against stable
 API. Cost accepted: a heavier core dependency set. The default `:analytic` B-source uses neither.
+
+---
+
+## 2026-05-28 — Cross-source landscape: `:analytic`, `:finitediff`, `:forwarddiff` are three estimators of one ρ
+
+**Status:** accepted (measured). Applies to the three `hessian` B-sources of `caic` (issue #11);
+pins the bounds the cross-source-agreement spec encodes. The mathematics is in `docs/math/0004` §4.
+
+The three B-sources are **three estimators of the same** Greven–Kneib ρ, not three computations of
+one number — their pairwise gaps are genuine and recorded, never tolerance-papered (the
+bootstrap-vs-analytic precedent applies). Two gaps are *expected-divergent*, and one pair is
+*correctness-tight* (the `:finitediff ≡ analytic=FALSE` entry above). The two genuine gaps:
+
+- **σ-freezing gap** `|ρ_forwarddiff − ρ_finitediff|`: `:forwarddiff` rides
+  `MixedModelsForwardDiffExt`, whose `fd_deviance` holds σ̂² **fixed** while varying θ, whereas the
+  self-driven `:finitediff` differentiates the **re-profiled** σ²(θ) deviance (`docs/math/0004`
+  §3a). Re-profiling adds θ-curvature that freezing removes, so the two Hessians — hence the two ρ —
+  differ. This is the accepted, documented σ-freezing divergence (the user directed "ride the ext,
+  document σ-freezing").
+- **closed-form-vs-numeric gap** `|ρ_analytic − ρ_finitediff|`: the closed-form Hessian is not the
+  optimiser's numeric Hessian; the gap grows with s and the profile curvature.
+
+**Measured `sleepstudy` spread (ML), the basis of the bounds:**
+
+| case     | s | `ρ_analytic` | `ρ_finitediff` | `ρ_forwarddiff` | `\|an−fd\|` | `\|ford−fd\|` |
+|----------|---|--------------|----------------|-----------------|-----------|-------------|
+| int_ml   | 1 | 18.97927     | 18.85977       | 18.85725        | 0.120     | 0.00252     |
+| slope_ml | 3 | 30.96983     | 32.17335       | 31.96176        | 1.20      | 0.212       |
+
+The structure is robust across all four ML+REML cases: the σ-freezing gap is strictly *smaller*
+than the closed-form-vs-numeric gap (`|ford−fd| < |an−fd|`), and both spreads grow with s (s = 1
+tight, s = 3 widest). (Note: `docs/math/0004` §4's loose "`:forwarddiff` sits between" holds only
+for the s = 3 cases — in the s = 1 cases ρ_forwarddiff falls just below ρ_finitediff rather than
+being bracketed — so the spec encodes the robust inequality, not "between".)
+
+**Derived bounds** (the cross-source-agreement spec, not a correctness gate against R):
+
+- **genuine-divergence floor** `1e-3`: every gap exceeds it, proving a real inter-estimator gap;
+  it sits well above FD/AD noise (the symmetric-Hessian checks put that at ~1e-6) and below the
+  smallest measured genuine gap (the σ-frozen intercept gap, ≈2.5e-3).
+- **same-ρ ceiling** `1.5`: every gap is below it, confirming all three remain estimators of one ρ;
+  it is > the worst measured `|Δ|` (1.20, slope_ml). A gap above this band would mean a source
+  computes a *different* quantity, not a noisier estimate of the same one.
+
+---
+
+## 2026-05-28 — `Random` added as a core dependency for the bootstrap path
+
+**Status:** accepted.
+
+`cAIC.jl` adds `Random` (stdlib) to its core `[deps]` to expose `AbstractRNG` and `default_rng` in
+the public `caic()` signature (the `rng` kwarg) and `randn` in the bootstrap spine. `Random` is a
+stdlib — no binary or compile-time overhead — and the reproducibility contract (seeded `rng` for
+deterministic results) is a first-class user-facing feature, not a test-only concern. Per §3 the
+entry here serves as the formal record.
+
+---
+
+## 2026-05-28 — Conditional-bootstrap df: Level-1 shared-input fixture against `cAIC4::conditionalBootstrap`
+
+**Status:** accepted (measured). Closes the §5 dispositions #1, #2, #3 of
+`docs/math/0005-conditional-bootstrap.md`.
+
+The Level-1 isolation gate for the bootstrap path is now realised as a **shared-input fixture
+against `cAIC4`'s `conditionalBootstrap` arithmetic** at `rtol = 1e-6` / `atol = 1e-10` — the
+same tight tolerance as the analytic Level-1 gate. Fixture generator pair
+`test/generate_fixtures_bootstrap.{jl,R}` writes seeded synthetic `(yhat, σ, Y*, Ŷ*)` matrices
+on the Julia side and runs cAIC4's bias-correction arithmetic (lines 23–25 of cAIC4 v1.1
+`R/conditionalBootstrap.R`) on the R side, with a textual self-check on the function body to
+pin the formula against silent cAIC4 drift. The Julia test is
+`test/dof_lmm_tests.jl`: *"efron_penalty reproduces cAIC4's conditionalBootstrap arithmetic on
+shared Y*/Ŷ*"*. Four cases at `B ∈ {2, 20, 100, 500}` and `n ∈ {6, 8, 25, 50}` exercise the
+unbiased `(B−1)` divisor (including its minimum), row-mean centring, and the larger Σ-loops.
+
+**What changed in `efron_penalty`.** The Level-1 unit was *previously* the population-mean /
+`B`-divisor estimator (centred on the original fit `ŷ`); it is now `cAIC4`'s sample-covariance
+formula:
+
+```math
+\rho =
+  \frac{1}{(B - 1)\,\hat\sigma^{2}}
+  \sum_{b = 1}^{B} \sum_{i = 1}^{n}
+    \hat y^{*}(b)_{i} \, \bigl(y^{*}(b)_{i} - \bar y^{*}_{i}\bigr)
+  + \texttt{sigmapenalty},
+```
+
+with `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, `B ≥ 2` (validated; raises `ArgumentError` for `B = 1` —
+no silent division by zero), and `sigmapenalty` default **`0`** (matching cAIC4's bare
+arithmetic; the `_bootstrap` spine passes the user-supplied `sigmapenalty` (default `1`)
+explicitly for σ²-parameter-count symmetry with the analytic path). The `yhat` argument is
+retained in the signature for symmetry with the analytic and numeric Level-1 units but is
+unused arithmetically — documented in the function's docstring.
+
+**Why this is not a tolerance loosening.** The previous formula was *asymptotically* equivalent
+to cAIC4's but did not bit-match at finite `B`; a tight Level-1 gate was therefore not
+realisable. The fix is a code change (CLAUDE §2: cAIC4 is ground truth), not a tolerance
+adjustment. The 2026-05-28 bootstrap-vs-analytic convergence gate (`atol = 2.0`, `nboot = 2000`)
+continues to hold under the new formula — the unbiased sample-covariance variant has slightly
+larger MC variance, but it is absorbed inside the 4–6σ band.
+
+**End-to-end (Level-2) parity is still not a release gate.** Cross-language RNG and per-draw
+optimiser differences make bit-match against `cAIC4::cAIC(..., method = "conditionalBootstrap")`
+unachievable; the prior 2026-05-27 entry on "validated by isolation + analytic cross-check"
+remains in force. What changes is that the Level-1 isolation claim is now operational, not
+prospective.
+
+---
+
+## 2026-05-28 — Bootstrap-vs-analytic convergence gate: `atol=2.0, nboot=2000`
+
+**Status:** accepted.
+
+The Level-2 convergence gate (`caic bootstrap: converges to analytic df with large nboot`) checks
+that the Efron bootstrap df converges to the Greven–Kneib analytic df at high draw count. The
+tolerance is derived from the MC standard error for the sleepstudy random-intercept model:
+
+- `ρ_analytic ≈ 19` (random-intercept + slope, ML).
+- Each draw independently contributes to the covariance sum; the MC standard error of
+  `ρ_bootstrap` at B draws is roughly `σ_MC ≈ C/√B` where `C ≈ 10–15` for this model.
+- At `B = 2000`: `σ_MC ≈ 0.3–0.5`, so `atol = 2.0` is a 4–6σ band. This is conservative
+  enough to survive unlucky seeds yet tight enough to catch a wrong-formula bug (which would
+  produce a bias of several units).
+
+Per the memory note (bootstrap-not-equal-analytic.md): the bootstrap df does *not* converge in
+probability to analytic df in the strict frequentist sense — the two estimate different quantities
+and their means differ by a finite gap. The convergence checked here is that the *empirical* gap
+between a large-sample bootstrap estimate and the analytic value is within the MC noise band, not
+that the two estimators are asymptotically equivalent. Do NOT tighten this tolerance.
