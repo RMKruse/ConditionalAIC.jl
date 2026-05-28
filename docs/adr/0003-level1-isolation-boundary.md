@@ -72,3 +72,28 @@ fit-dependent bridge that reaches into lme4 internals and carries the θ-paramet
   lists-of-matrices map to HDF5 groups), and independent read/write from both
   languages. Test-only deps: `HDF5.jl` (Julia) and `hdf5r` (R) — neither enters the
   package's runtime dependencies.
+
+## Addendum (2026-05-27) — R HDF5 reader is `rhdf5`, not `hdf5r`
+
+When the pipeline was first stood up (#7), `hdf5r` would not build against Homebrew R on
+macOS-ARM: its source build links the static `libhdf5.a`, and under R's
+`-undefined dynamic_lookup` bundle link the archive member for `H5Dread_chunk` is left
+undefined, so the package fails to load; forcing a shared link in turn defeats its
+configure version probe, and no CRAN binary exists for the Homebrew R platform string.
+
+We therefore use **`rhdf5`** (Bioconductor) as the R HDF5 reader instead of `hdf5r`.
+`rhdf5` bundles its own correctly-linked HDF5 via `Rhdf5lib`, so it has no system-HDF5
+dependency and builds reliably. **Nothing else changes**: the neutral hand-off is still
+HDF5, the isolation boundary is still `calculateGaussianBc`, and the Julia side is still
+`HDF5.jl`. Only the R package differs (`generate_fixtures.R` uses `rhdf5::h5read` /
+`h5write`). The computation-bearing matrices (`A`, `V0inv`, `Wⱼ`) are symmetric, so the
+Julia↔R column/row-major round-trip leaves them unchanged; the one non-symmetric
+component `X` is not stored at all (only `n`/`p` scalars are, since `calculateGaussianBc`
+reads `X` solely as `ncol(X)`). `rhdf5` writes an R length-1 numeric as a 1-element
+array, so the reference ρ is coerced back to a scalar on the Julia side.
+
+The gated live-R job (`CAIC_LIVE_RCALL=1`) uses the same Rscript + HDF5 hand-off (not
+`RCall.jl`); it sources the pinned `cAIC4` v1.1 `calculateGaussianBc.R` directly, since
+that function is pure base R and the Level-1 boundary involves no model fit. Provenance
+(the `cAIC4`, `rhdf5`, R, Julia, and `HDF5_jll` versions) is recorded in the fixture's
+`meta` group at generation time.
