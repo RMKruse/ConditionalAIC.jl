@@ -35,6 +35,56 @@ struct CAICResult{T<:AbstractFloat,M<:MixedModel}
     bsource::Symbol
 end
 
+"""
+    AnocaicTable{T<:AbstractFloat,M<:MixedModel}
+
+The result of comparing a user-supplied set of fitted models by conditional AIC
+(port of `cAIC4`'s `anocAIC`). Returned by [`anocaic`](@ref).
+
+Models are sorted ascending by `cAIC` — entry `1` is the best-fitting model (lowest cAIC).
+
+- `results::Vector{CAICResult{T,M}}` — per-model scoring results, sorted ascending by
+  `cAIC` (best first). Each [`CAICResult`](@ref) carries the `cAIC`, effective degrees of
+  freedom `ρ` (`dof`), conditional log-likelihood, and scoring provenance.
+- `inputorder::Vector{Int}` — original 1-based position of each result in the argument
+  list passed to `anocaic`. `inputorder[k]` is the input-list index of the k-th ranked
+  model.
+
+The Δcaic for rank `k` is `results[k].caic - results[1].caic` (≥ 0 for all `k`).
+"""
+struct AnocaicTable{T<:AbstractFloat,M<:MixedModel}
+    results::Vector{CAICResult{T,M}}
+    inputorder::Vector{Int}
+end
+
+function Base.show(io::IO, ::MIME"text/plain", t::AnocaicTable)
+    n = length(t.results)
+    best = t.results[1].caic
+    noun = n == 1 ? "model" : "models"
+    println(io, "Conditional AIC comparison (anocaic): $n $noun")
+    println(io, " Rank  Input        cAIC           ρ      condloglik       Δcaic")
+    for k in 1:n
+        r = t.results[k]
+        Δ = r.caic - best
+        println(
+            io,
+            "  ",
+            lpad(k, 3),
+            "    ",
+            lpad(t.inputorder[k], 3),
+            "  ",
+            lpad(round(r.caic; digits=4), 12),
+            "  ",
+            lpad(round(r.dof; digits=4), 8),
+            "  ",
+            lpad(round(r.condloglik; digits=4), 12),
+            "  ",
+            lpad(round(Δ; digits=4), 10),
+        )
+    end
+    return nothing
+end
+
 function Base.show(io::IO, ::MIME"text/plain", r::CAICResult)
     println(io, "Conditional AIC (cAIC)")
     println(io, "  cAIC               = ", r.caic)
