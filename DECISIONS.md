@@ -32,21 +32,37 @@ outside this band, so the gate still discriminates correctness from optimiser no
 
 ---
 
-## 2026-05-27 — FD-sourced Greven–Kneib Hessian B does not bit-match `cAIC4` `analytic=FALSE`
+## 2026-05-28 — `:finitediff` Greven–Kneib Hessian B vs `cAIC4` `analytic=FALSE`: `atol = 1e-3`
 
-**Status:** pending validation — tolerance to be measured and recorded once Level-2
-numbers exist.
+**Status:** accepted (measured). Supersedes the 2026-05-27 *pending validation* note of the
+same title. Applies to `caic` with `hessian=:finitediff` (issue #11).
 
-`cAIC.jl` will expose a finite-difference source for the Greven–Kneib Hessian B (the
-analogue of `cAIC4`'s `analytic=FALSE`), permitted under the reframed §9/§12 (see
-[ADR-0001](docs/adr/0001-finite-differences-constrained-not-banned.md)). It cannot
-reproduce `cAIC4`'s `analytic=FALSE` values: `cAIC4` lifts lme4's
-Richardson-extrapolated (`deriv12`) Hessian of lme4's profiled deviance at lme4's θ̂;
-`cAIC.jl` applies a FD scheme to `MixedModels`' objective at `MixedModels`' θ̂
-(different optimiser, θ̂, FD algorithm, and possibly REML-vs-ML objective). Agreement
-is a Level-2 derived tolerance, to be measured and recorded here. The closed-form and
-`ForwardDiff` B-sources remain the validated, default path, held to the Level-1
-tolerance.
+`cAIC.jl`'s `:finitediff` B-source self-drives `FiniteDiff.finite_difference_hessian` over
+`MixedModels`' *stable* `objective!` at `MixedModels`' θ̂ (ADR-0002, ADR-0001;
+`docs/math/0004` §3b) — **not** `cAIC4`'s lifted, Richardson-extrapolated lme4 Hessian. Because
+`objective!` **re-profiles** σ²(θ), it differentiates the *same* profiled deviance lme4 stores in
+`m@optinfo$derivs$Hessian`, so `:finitediff` reproduces `cAIC4`'s `analytic = FALSE` ρ to
+finite-difference accuracy. It cannot bit-match: different optimiser, θ̂, and FD algorithm.
+
+**Derivation.** Same Level-2 fixture and four `sleepstudy` cases as the analytic entry above
+(`test/fixtures/caic_level2.h5`, key `df_numeric`/`caic_numeric`; cAIC4 1.1 / lme4 2.0.1). Measured
+`|Δρ| = |ρ_finitediff − cAIC4 analytic=FALSE|`:
+
+| case        | s | `|Δρ|`   |
+|-------------|---|----------|
+| slope_ml    | 3 | 1.37e-4  |
+| slope_reml  | 3 | 2.59e-5  |
+| int_ml      | 1 | 2.24e-7  |
+| int_reml    | 1 | 6.97e-7  |
+
+The worst case (slope_ml, s = 3) combines the central-difference truncation error with the
+lme4↔MixedModels θ̂ discrepancy (the same ~4e-5 flat-objective shift as the analytic entry); the
+s = 1 cases, where θ̂ matches to ~1e-9, agree to ~1e-7 — confirming the gap is FD-accuracy +
+fit-induced, not a math error.
+
+**Tolerance.** `atol = 1e-3` on `caic` and `df` (ρ), the *same* fit-discrepancy band as the
+analytic Level-2 gate (≈7× the worst observed 1.37e-4). Not a loosened tolerance (CLAUDE §10): a
+genuine assembly error moves `2ρ` by `≥ O(0.1)`, an order of magnitude outside this band.
 
 ---
 
@@ -140,3 +156,46 @@ How each dependency is used differs (see ADR-0002): `:forwarddiff` calls
 **not** use `MixedModelsFiniteDiffExt`. So only the ForwardDiff path sits on experimental surface
 (shape-asserted, frozen by the `=5.5.1` pin); the FiniteDiff dependency is exercised against stable
 API. Cost accepted: a heavier core dependency set. The default `:analytic` B-source uses neither.
+
+---
+
+## 2026-05-28 — Cross-source landscape: `:analytic`, `:finitediff`, `:forwarddiff` are three estimators of one ρ
+
+**Status:** accepted (measured). Applies to the three `hessian` B-sources of `caic` (issue #11);
+pins the bounds the cross-source-agreement spec encodes. The mathematics is in `docs/math/0004` §4.
+
+The three B-sources are **three estimators of the same** Greven–Kneib ρ, not three computations of
+one number — their pairwise gaps are genuine and recorded, never tolerance-papered (the
+bootstrap-vs-analytic precedent applies). Two gaps are *expected-divergent*, and one pair is
+*correctness-tight* (the `:finitediff ≡ analytic=FALSE` entry above). The two genuine gaps:
+
+- **σ-freezing gap** `|ρ_forwarddiff − ρ_finitediff|`: `:forwarddiff` rides
+  `MixedModelsForwardDiffExt`, whose `fd_deviance` holds σ̂² **fixed** while varying θ, whereas the
+  self-driven `:finitediff` differentiates the **re-profiled** σ²(θ) deviance (`docs/math/0004`
+  §3a). Re-profiling adds θ-curvature that freezing removes, so the two Hessians — hence the two ρ —
+  differ. This is the accepted, documented σ-freezing divergence (the user directed "ride the ext,
+  document σ-freezing").
+- **closed-form-vs-numeric gap** `|ρ_analytic − ρ_finitediff|`: the closed-form Hessian is not the
+  optimiser's numeric Hessian; the gap grows with s and the profile curvature.
+
+**Measured `sleepstudy` spread (ML), the basis of the bounds:**
+
+| case     | s | `ρ_analytic` | `ρ_finitediff` | `ρ_forwarddiff` | `\|an−fd\|` | `\|ford−fd\|` |
+|----------|---|--------------|----------------|-----------------|-----------|-------------|
+| int_ml   | 1 | 18.97927     | 18.85977       | 18.85725        | 0.120     | 0.00252     |
+| slope_ml | 3 | 30.96983     | 32.17335       | 31.96176        | 1.20      | 0.212       |
+
+The structure is robust across all four ML+REML cases: the σ-freezing gap is strictly *smaller*
+than the closed-form-vs-numeric gap (`|ford−fd| < |an−fd|`), and both spreads grow with s (s = 1
+tight, s = 3 widest). (Note: `docs/math/0004` §4's loose "`:forwarddiff` sits between" holds only
+for the s = 3 cases — in the s = 1 cases ρ_forwarddiff falls just below ρ_finitediff rather than
+being bracketed — so the spec encodes the robust inequality, not "between".)
+
+**Derived bounds** (the cross-source-agreement spec, not a correctness gate against R):
+
+- **genuine-divergence floor** `1e-3`: every gap exceeds it, proving a real inter-estimator gap;
+  it sits well above FD/AD noise (the symmetric-Hessian checks put that at ~1e-6) and below the
+  smallest measured genuine gap (the σ-frozen intercept gap, ≈2.5e-3).
+- **same-ρ ceiling** `1.5`: every gap is below it, confirming all three remain estimators of one ρ;
+  it is > the worst measured `|Δ|` (1.20, slope_ml). A gap above this band would mean a source
+  computes a *different* quantity, not a noisier estimate of the same one.

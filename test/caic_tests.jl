@@ -127,10 +127,11 @@ end
     @test_throws ArgumentError caic(m; method=:bootstrap, nboot=0)    # non-positive nboot
 end
 
-@testitem "caic accepts but defers the unimplemented method/B-source paths" tags = [:level2] begin
-    # `:bootstrap`, `:forwarddiff`, `:finitediff` are valid (they parse and validate) but
-    # land on estimators not delivered in #8. They must fail with a clear "not yet
-    # implemented" message — never silently fall back to the analytic path.
+@testitem "caic accepts but defers the unimplemented bootstrap method" tags = [:level2] begin
+    # `:bootstrap` is valid (it parses and validates) but lands on an estimator not delivered
+    # yet (#12). It must fail with a clear "not yet implemented" message — never silently fall
+    # back to the analytic path. (The `:forwarddiff` / `:finitediff` B-sources are delivered
+    # in #11 and are exercised by the numeric-source testitems below.)
     using MixedModels
     using cAIC: caic
 
@@ -142,8 +143,107 @@ end
         progress=false,
     )
     @test_throws "not yet implemented" caic(m; method=:bootstrap)
-    @test_throws "not yet implemented" caic(m; hessian=:forwarddiff)
-    @test_throws "not yet implemented" caic(m; hessian=:finitediff)
+end
+
+@testitem "caic scores the numeric B-sources coherently and records their provenance" tags = [
+    :level2
+] begin
+    # The numeric B-sources run end-to-end through the same spine as `:analytic`, differing
+    # only in how B is obtained (`bhessian` → `dof_lmm_numeric`). Each must return a coherent
+    # `CAICResult` (cAIC = −2ℓ + 2ρ), record the B-source it actually ran, share the
+    # conditional log-likelihood with the analytic path (ℓ does not depend on B), and — the
+    # mutation contract — leave the fit at its fitted θ̂ (the self-driven FD path perturbs and
+    # restores; a leftover perturbation would poison the score).
+    using MixedModels
+    using cAIC: caic, CAICResult
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    θ̂ = copy(m.θ)
+    r_an = caic(m; hessian=:analytic)
+
+    for src in (:finitediff, :forwarddiff)
+        r = caic(m; hessian=src)
+        @test r isa CAICResult
+        @test r.bsource === src                       # provenance: what actually ran
+        @test r.method === :steinian
+        @test r.caic ≈ -2 * r.condloglik + 2 * r.dof   # assembly identity
+        @test r.condloglik ≈ r_an.condloglik           # ℓ is B-source-independent
+        @test m.θ == θ̂                                  # fit left untouched (restore contract)
+    end
+end
+
+@testitem "the three B-sources are estimators of one ρ: the documented cross-source landscape" tags = [
+    :level2
+] begin
+    # `:analytic`, `:finitediff`, and `:forwarddiff` are three estimators of the *same*
+    # Greven–Kneib ρ, not three computations of one number (docs/math/0004 §4). Their pairwise
+    # gaps are genuine and recorded, never tolerance-papered (the bootstrap-vs-analytic
+    # precedent). This test pins the *structure* of that landscape — the numbers (the measured
+    # sleepstudy spread that sets the bounds) live in DECISIONS.md (2026-05-28):
+    #   • the two numeric sources cluster — the σ-freezing gap |ρ_ford − ρ_fd| (0004 §3a) is
+    #     strictly *smaller* than the closed-form-vs-numeric-Hessian gap |ρ_an − ρ_fd|;
+    #   • every gap is a genuine divergence (well above FD/AD noise), yet all three remain
+    #     estimators of one ρ — bounded within the recorded same-ρ band;
+    #   • the spread grows with the random-effects dimension s (s = 1 tight, s = 3 widest).
+    # (`:finitediff ≡ cAIC4 analytic = FALSE` — the *correctness*-tight pair — is the Level-2
+    # gate above; here the comparison is purely among the three Julia sources, no R.)
+    using MixedModels
+    using cAIC: caic
+
+    data = MixedModels.dataset(:sleepstudy)
+    ρ(m, src) = caic(m; hessian=src).dof
+
+    # s = 3 correlated slope (the widest spread) and s = 1 random intercept (the tightest).
+    m3 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    gaps(m) = (
+        an_fd=abs(ρ(m, :analytic) - ρ(m, :finitediff)),
+        ford_fd=abs(ρ(m, :forwarddiff) - ρ(m, :finitediff)),
+        an_ford=abs(ρ(m, :analytic) - ρ(m, :forwarddiff)),
+    )
+    g3, g1 = gaps(m3), gaps(m1)
+
+    # Structure: the numeric pair clusters tighter than the analytic closed form, on both s.
+    @test g3.ford_fd < g3.an_fd
+    @test g1.ford_fd < g1.an_fd
+
+    # Genuine divergences — each gap is a real inter-estimator gap, not numerical noise
+    # (the symmetric-Hessian checks put FD/AD noise at ~1e-6); the floor is well below the
+    # smallest measured genuine gap (the σ-frozen intercept gap, ≈2.5e-3). See DECISIONS.md.
+    GENUINE_FLOOR = 1e-3
+    @test g3.an_fd > GENUINE_FLOOR
+    @test g3.ford_fd > GENUINE_FLOOR
+    @test g1.an_fd > GENUINE_FLOOR
+    @test g1.ford_fd > GENUINE_FLOOR
+
+    # …yet all three remain estimators of one ρ — every gap is inside the recorded same-ρ
+    # band (the ceiling is > the worst measured |Δ|, ≈1.2 on slope_ml). See DECISIONS.md.
+    SAME_RHO_CEIL = 1.5
+    @test g3.an_fd < SAME_RHO_CEIL
+    @test g3.an_ford < SAME_RHO_CEIL
+    @test g3.ford_fd < SAME_RHO_CEIL
+
+    # s-dependence: the s = 3 spread strictly exceeds the s = 1 spread, both pairs (0004 §4).
+    @test g3.an_fd > g1.an_fd
+    @test g3.ford_fd > g1.ford_fd
 end
 
 @testitem "caic rejects a non-Gaussian (GLMM) fit — M3 scope" tags = [:level2] begin
@@ -181,6 +281,28 @@ end
     scoreit(model) = caic(model)
     r = @inferred scoreit(m)
     @test r isa CAICResult{Float64}
+end
+
+@testitem "caic is type-stable on the numeric B-source paths" tags = [:level2] begin
+    # Type stability is a defect gate (CLAUDE §4) and must hold on the numeric paths too, not
+    # only the default `:analytic` one. The `:finitediff`/`:forwarddiff` branch routes through
+    # `bhessian` (→ `Matrix{T}`) and `dof_lmm_numeric` (→ `T`); `@inferred` asserts `caic`
+    # still resolves to a concrete `CAICResult{Float64,…}` with no Any/Union fallback. A
+    # per-source helper with no kwargs gives `@inferred` a clean call to infer.
+    using MixedModels
+    using cAIC: caic, CAICResult
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    scorefd(model) = caic(model; hessian=:finitediff)
+    scoreford(model) = caic(model; hessian=:forwarddiff)
+    @test (@inferred scorefd(m)) isa CAICResult{Float64}
+    @test (@inferred scoreford(m)) isa CAICResult{Float64}
 end
 
 @testitem "caic dispatches on the fit's REML flag (objective dispatch, no force-refit)" tags = [
@@ -307,6 +429,58 @@ end
             @test r.caic ≈ asscalar(read(g["caic"])) atol = L2_ATOL
             @test r.dof ≈ asscalar(read(g["df"])) atol = L2_ATOL
             @test r.condloglik ≈ asscalar(read(g["cll"])) atol = L2_ATOL
+        end
+    end
+end
+
+@testitem "caic(:finitediff) matches cAIC4 analytic=FALSE end-to-end (Level-2)" tags = [
+    :level2
+] begin
+    # The correctness gate for the self-driven finite-difference B-source (#11). `:finitediff`
+    # differentiates the *profiled* deviance — the same object `lme4`'s optimiser differentiates
+    # for `m@optinfo$derivs$Hessian` — so `caic(m; hessian=:finitediff)` must reproduce the ρ
+    # and cAIC that `cAIC4::cAIC(fit, analytic = FALSE)` returns (fixture keys `df_numeric`,
+    # `caic_numeric`, written by `generate_fixtures_level2.R`).
+    #
+    # The agreement band is the *same* fit-discrepancy-derived `L2_ATOL = 1e-3` the analytic
+    # Level-2 gate uses (DECISIONS.md 2026-05-27): the measured worst |Δρ| is 1.37e-4 (slope_ml,
+    # s = 3; FD accuracy + the lme4↔MixedModels θ̂ discrepancy), with the intercept cases agreeing
+    # to ~1e-7. This is the *correctness*-tight pair of docs/math/0004 §4; the σ-frozen
+    # `:forwarddiff` source is deliberately **not** compared here (it diverges — see DECISIONS).
+    using HDF5
+    using MixedModels
+    using cAIC: caic
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    specs = Dict(
+        "slope_ml" => (@formula(reaction ~ 1 + days + (1 + days | subj)), false),
+        "slope_reml" => (@formula(reaction ~ 1 + days + (1 + days | subj)), true),
+        "int_ml" => (@formula(reaction ~ 1 + days + (1 | subj)), false),
+        "int_reml" => (@formula(reaction ~ 1 + days + (1 | subj)), true),
+    )
+    L2_ATOL = 1e-3   # derived Level-2 tolerance; see DECISIONS.md (2026-05-27)
+
+    fixture = joinpath(@__DIR__, "fixtures", "caic_level2.h5")
+    @test isfile(fixture)
+
+    data = MixedModels.dataset(:sleepstudy)
+    h5open(fixture, "r") do f
+        cases = filter(!=("meta"), keys(f))
+        @test !isempty(cases)
+        for name in cases
+            haskey(specs, name) || error("fixture case `$name` has no Julia spec")
+            form, reml = specs[name]
+            g = f[name]
+            haskey(g, "df_numeric") || error(
+                "fixture case `$name` has no df_numeric — run generate_fixtures_level2.R",
+            )
+
+            m = fit(MixedModel, form, data; REML=reml, progress=false)
+            r = caic(m; hessian=:finitediff)
+
+            @test r.dof ≈ asscalar(read(g["df_numeric"])) atol = L2_ATOL
+            @test r.caic ≈ asscalar(read(g["caic_numeric"])) atol = L2_ATOL
         end
     end
 end

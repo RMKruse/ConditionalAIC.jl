@@ -35,7 +35,7 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 
 | `cAIC4` | `cAIC.jl` | Milestone | Status | Notes |
 |---------|-----------|-----------|--------|-------|
-| `cAIC(object, method, B, sigma.penalty, analytic)` | `caic(m; method, hessian, nboot, sigmapenalty)` | M2 (Gaussian) | 🟢 | Gaussian `method=:auto/:steinian`, `hessian=:analytic` path implemented and Level-2-validated vs `cAIC4` (#8; atol=1e-3, DECISIONS). Renamed `cAIC`→`caic` (collides with module name). `:bootstrap`/`:forwarddiff`/`:finitediff` parse but error not-yet-implemented. |
+| `cAIC(object, method, B, sigma.penalty, analytic)` | `caic(m; method, hessian, nboot, sigmapenalty)` | M2 (Gaussian) | 🟢 | Gaussian `method=:auto/:steinian` with all three B-sources implemented and Level-2-validated vs `cAIC4`: `hessian=:analytic` (#8; atol=1e-3) and `:finitediff`/`:forwarddiff` (#11; the numeric B-sources, DECISIONS). Renamed `cAIC`→`caic` (collides with module name). Only `method=:bootstrap` parses-but-errors not-yet-implemented (#12). |
 | — (same, GLMM dispatch) | `caic(m::GeneralizedLinearMixedModel; …)` | M3 | ⬜ | Family coverage ungrilled. |
 | `anocAIC(...)` (compare a set of fits) | `anocaic(ms...)` → table | M2.5 | 🟦 | **Comparison**: rank a user-supplied fixed set. "Early, right after scoring." Spelling: `cAIC4` exports `anocAIC`; our lowercase port is `anocaic`. |
 | `stepcAIC(...)` | `stepcaic(...)` | M4 | 🟦 | **Search**: RE structure primary, FE optional. Shape resolved; details ungrilled. |
@@ -62,7 +62,7 @@ Public surface verified against `cAIC4`'s `NAMESPACE` (2026-05-27): exports are 
 | steinian | `method=:steinian` | 🟢 (M2 Gaussian) | Analytic GK; Level-1 df tolerance + Level-2 end-to-end (#8). |
 | `conditionalBootstrap` | `method=:bootstrap` | 🟦 (design) | Validated by isolation + analytic cross-check, not bit-match (DECISIONS). `rng` arg for reproducibility. |
 | `analytic=TRUE` (closed-form B) | `hessian=:analytic` | 🟢 | Default B-source; no derivative dependency. Level-2-validated (#8). |
-| `analytic=FALSE` (lifted lme4 Hessian) | `hessian=:forwarddiff` / `:finitediff` | 🟦 | No lme4 Hessian to lift in MM; B computed at cAIC-time. No bit-match to `analytic=FALSE` (DECISIONS + ADR-0001). |
+| `analytic=FALSE` (lifted lme4 Hessian) | `hessian=:forwarddiff` / `:finitediff` | 🟢 | No lme4 Hessian to lift in MM; B computed at cAIC-time (ADR-0002, #11). `:finitediff` self-drives FiniteDiff over MM's stable profiled objective and reproduces `analytic=FALSE` ρ to FD accuracy, Level-2-validated (atol=1e-3, DECISIONS); `:forwarddiff` rides the experimental ext, diverging by σ-freezing. No bit-match to `analytic=FALSE` (DECISIONS + ADR-0001). |
 | `sigma.penalty` | `sigmapenalty::Int` | 🟢 | Carried through unchanged; verified to shift ρ by one per unit (#8). |
 
 ## REML / ML

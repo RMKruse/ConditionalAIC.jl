@@ -36,13 +36,40 @@ first.
 | `adjA(refs, z)`   | fn          | [`reduceboundary`]  | the `ReMat` adjoint sparse block for the subset design    |
 | `LinearMixedModel(y, feterm, reterms, form)` | constructor | [`reduceboundary`] | assemble the reduced model from reused design objects |
 | `fit!(m)`         | exported fn | [`reduceboundary`]  | refit the reduced model to its MLE/REML estimate          |
+| `m.θ`             | property    | [`bhessian`]        | fitted θ̂ — the FD evaluation point and restoration check |
+| `ForwardDiff.hessian(m)` | ext fn (experimental) | [`bhessian`] | s×s deviance Hessian (`:forwarddiff`; frozen-σ — see below) |
+| `objective!(m)`   | unexported  | [`bhessian`]        | curried θ→deviance closure (`Base.Fix1`); FD driver target |
+| `setθ!(m, θ)`     | unexported  | [`bhessian`]        | set variance parameters θ — restore θ̂ after FD perturbation |
+| `updateL!(m)`     | unexported  | [`bhessian`]        | refactorise `L` after `setθ!` — completes the restore    |
+
+**Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
+`MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
+`MixedModels`' *experimental* AD surface; the docs warn that which parameters are
+differentiated alongside θ may change, which would silently alter B's dimension, so
+[`bhessian`] shape-asserts the `s×s` result against the `=5.5.1` pin. The companion
+`FiniteDiff.finite_difference_hessian(::LinearMixedModel)` extension is **deliberately not
+accessed** — the `:finitediff` source self-drives `FiniteDiff` over the stable
+`objective!`/`setθ!`/`updateL!` trio instead (ADR-0002).
 """
 module MMInternals
 
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
-    LinearMixedModel, AbstractReMat, ReMat, ranef, response, fitted, leverage, adjA, fit!
+    LinearMixedModel,
+    AbstractReMat,
+    ReMat,
+    ranef,
+    response,
+    fitted,
+    leverage,
+    adjA,
+    fit!,
+    objective!,
+    setθ!,
+    updateL!
 using MixedModels: MixedModels
+using FiniteDiff: finite_difference_hessian
+using ForwardDiff: ForwardDiff
 
 const PINNED_VERSION = "5.5.1"
 
@@ -266,6 +293,74 @@ function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
         adjA(re.refs, znew),
         scratchnew,
     )
+end
+
+"""
+    bhessian(m::LinearMixedModel{T}, source::Symbol) -> Matrix{T}
+
+The `s×s` numeric Hessian **B** of the (restricted) profile objective with respect to the
+variance parameters θ, evaluated at the fitted θ̂, on the **deviance scale** (−2·profile
+log-likelihood for ML, the REML criterion for REML) — the scale `cAIC4`'s `analytic = FALSE`
+path consumes (`docs/math/0004` §1, §3). `s = length(m.θ)`. Dispatches on `source`:
+
+- `:finitediff` — **self-driven** finite differences over `MixedModels`' *stable*
+  `objective!`/`setθ!`/`updateL!` API (ADR-0002), **not** `MixedModelsFiniteDiffExt`.
+  `objective!(m, θ)` mutates `m`, so `FiniteDiff` leaves it parked at its last probe; the
+  driver restores θ̂ in a `finally` and **fails loud** if the restoration did not take — a
+  Hessian computed against a silently-mutated fit is a defect (`docs/math/0004` §3b).
+- `:forwarddiff` — rides the **experimental** `MixedModelsForwardDiffExt`
+  (`ForwardDiff.hessian(m)`), the only B-source on experimental surface (ADR-0002). It
+  differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing
+  of `docs/math/0004` §3a; the result type is shape-asserted against the `=5.5.1` pin.
+
+The `s×s` result is shape-asserted: the experimental AD surface may change which parameters
+are differentiated alongside θ, which would silently alter B's dimension — the assertion
+turns that drift into a loud error against the pinned version.
+
+# Throws
+- `ArgumentError` for a `source` other than `:finitediff` / `:forwarddiff`.
+- `ErrorException` if the finite-difference driver leaves `m` perturbed, or if the Hessian's
+  shape drifts from `s×s`.
+"""
+function bhessian(m::LinearMixedModel{T}, source::Symbol) where {T}
+    s = length(m.θ)
+    H = if source === :finitediff
+        _bhessian_finitediff(m)
+    elseif source === :forwarddiff
+        # MixedModelsForwardDiffExt — the only experimental-surface touchpoint (ADR-0002).
+        # Out-of-place (it copies A/L/reterms), so it does not mutate `m`.
+        ForwardDiff.hessian(m)
+    else
+        throw(
+            ArgumentError(
+                "bhessian source must be :finitediff or :forwarddiff; got :$(source)"
+            ),
+        )
+    end
+    size(H) == (s, s) || error(
+        "bhessian(:$source) produced a $(size(H)) Hessian; expected $s×$s (s = length(θ̂)). \
+         The experimental MixedModels AD surface may have changed which parameters are \
+         differentiated — reconcile against the pinned MixedModels v$PINNED_VERSION.",
+    )
+    return H::Matrix{T}
+end
+
+# Self-driven finite differences over the stable in-place objective (ADR-0002). The curried
+# `objective!(m)` (= `Base.Fix1(objective!, m)`) re-profiles σ²(θ) at every probe — so this
+# is the *profiled*-deviance Hessian `lme4`/`cAIC4` use — but it also mutates `m`. Restore
+# θ̂ in the `finally`, then assert it took: never return a Hessian against a mutated fit.
+function _bhessian_finitediff(m::LinearMixedModel{T}) where {T}
+    θ̂ = copy(m.θ)
+    H = try
+        finite_difference_hessian(objective!(m), θ̂)   # Symmetric{T}; materialised below
+    finally
+        updateL!(setθ!(m, θ̂))
+    end
+    m.θ == θ̂ || error(
+        "the :finitediff B-source left the model perturbed (m.θ = $(m.θ) ≠ θ̂ = $θ̂); \
+         refusing to return a Hessian computed against a silently-mutated fit."
+    )
+    return Matrix{T}(H)
 end
 
 end # module MMInternals
