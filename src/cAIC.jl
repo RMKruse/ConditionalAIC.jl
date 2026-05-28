@@ -6,8 +6,9 @@ mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStat
 — a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
 
 [`caic`](@ref) scores a fitted Gaussian `LinearMixedModel` by its conditional AIC (M2): the
-analytic Greven–Kneib bias correction assembled end-to-end into a [`CAICResult`](@ref). The
-comparison (`anocaic`, M2.5) and search (`stepcaic`, M4) verbs remain stubs. All access to
+analytic Greven–Kneib bias correction assembled end-to-end into a [`CAICResult`](@ref).
+[`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5), returning an
+[`AnocaicTable`](@ref). The search verb (`stepcaic`, M4) remains a stub. All access to
 `MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
@@ -20,22 +21,20 @@ include("loglik.jl")
 include("dof_lmm.jl")        # defines DofLMM.GaussianComponents (used by Components)
 include("mm_internals.jl")   # QUARANTINE: the only MixedModels-internals touchpoint
 include("components.jl")     # fit-extracted arrays → GaussianComponents (uses ..DofLMM)
-include("types.jl")          # CAICResult (public, returned by caic)
+include("types.jl")          # CAICResult, AnocaicTable (public result types)
 include("scoring.jl")        # the caic methods (the scoring assembly)
+include("comparison.jl")     # the anocaic method (comparison table, M2.5)
 
 # ── Public surface ──────────────────────────────────────────────────────────
-# `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) and
-# `stepcaic` (M4 search) remain zero-method stubs so `using cAIC` exposes a stable export
-# surface before those estimators land. See CONTEXT.md for the Scoring / Comparison /
-# Search vocabulary.
+# `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) is
+# implemented in `comparison.jl`. `stepcaic` (M4 search) remains a zero-method stub.
+# See CONTEXT.md for the Scoring / Comparison / Search vocabulary.
 
 """
-    anocaic(models...)
+    anocaic(m::LinearMixedModel, rest::LinearMixedModel...; kwargs...) -> AnocaicTable
 
 Rank a user-supplied set of fitted models by conditional AIC (port of `cAIC4`'s
-`anocAIC`).
-
-Walking-skeleton stub — carries no methods yet (M2.5).
+`anocAIC`). See [`comparison.jl`] for the full signature and examples.
 """
 function anocaic end
 
@@ -49,6 +48,6 @@ Walking-skeleton stub — carries no methods yet (M4).
 """
 function stepcaic end
 
-export caic, anocaic, stepcaic, CAICResult
+export caic, anocaic, stepcaic, CAICResult, AnocaicTable
 
 end # module cAIC
