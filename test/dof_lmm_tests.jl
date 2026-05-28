@@ -45,6 +45,57 @@
     end
 end
 
+@testitem "dof_lmm_numeric reproduces calculateGaussianBc(analytic=FALSE) on Level-1 components" tags = [
+    :level1
+] begin
+    # Level-1 correctness gate for the *numeric* B-source assembly (issue #11). The numeric
+    # path (`analytic = FALSE`) takes the Hessian **B** externally (here the synthetic SPD
+    # fixture B), rebuilds the rescaled cross-product `C`, and runs the *same* ρ assembly.
+    # For every synthetic component set, `dof_lmm_numeric` must reproduce the ρ that
+    # `cAIC4::calculateGaussianBc(analytic = FALSE)` computed from the *identical*
+    # components **and the identical B** (written to the fixture by `generate_fixtures.R`).
+    # This isolates the assembly arithmetic from how B is obtained, which differs per source.
+    using HDF5
+    using cAIC: DofLMM
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    fixture = joinpath(@__DIR__, "fixtures", "dof_lmm_level1.h5")
+    @test isfile(fixture)
+
+    h5open(fixture, "r") do f
+        cases = filter(!=("meta"), keys(f))
+        @test !isempty(cases)
+        for name in cases
+            g = f[name]
+            haskey(g, "rho_ref_numeric") || error(
+                "fixture case `$name` has no rho_ref_numeric — run generate_fixtures.R"
+            )
+
+            n = read(g["n"])::Int
+            p = read(g["p"])::Int
+            s = read(g["s"])::Int
+            comps = DofLMM.GaussianComponents(
+                zeros(Float64, n, p),
+                read(g["e"]),
+                read(g["A"]),
+                read(g["V0inv"]),
+                [read(g["Wlist"]["W$j"]) for j in 1:s],
+                read(g["eWelist"]),
+                read(g["tye"]),
+                Bool(read(g["isREML"])),
+            )
+            B = read(g["B"])
+            ρ = DofLMM.dof_lmm_numeric(
+                comps, B; sigmapenalty=asscalar(read(g["sigma_penalty"]))
+            )
+            ρ_ref = asscalar(read(g["rho_ref_numeric"]))
+
+            @test ρ ≈ ρ_ref rtol = 1e-6 atol = 1e-10
+        end
+    end
+end
+
 @testitem "live R re-validation against cAIC4 (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin
@@ -131,16 +182,31 @@ end
         )
     end
 
-    # Type stability via @inferred, for both objectives and both float widths.
+    # A small SPD Hessian B for the numeric path (s = 1 here): `b > 0` is positive-definite.
+    spdB(::Type{T}, c) where {T} = Matrix{T}(
+        reshape([T(3)], length(c.Wlist), length(c.Wlist))
+    )
+
+    # Type stability via @inferred, for both objectives and both float widths — both the
+    # analytic (`dof_lmm`) and numeric (`dof_lmm_numeric`) entry points.
     for isREML in (false, true)
         c64 = tinycomps(Float64; isREML)
         @test (@inferred DofLMM.dof_lmm(c64)) isa Float64
+        @test (@inferred DofLMM.dof_lmm_numeric(c64, spdB(Float64, c64))) isa Float64
 
         c32 = tinycomps(Float32; isREML)
         ρ32 = @inferred DofLMM.dof_lmm(c32)
         @test ρ32 isa Float32
         @test ρ32 ≈ DofLMM.dof_lmm(c64) rtol = 1e-4   # tracks Float64 to single precision
+
+        ρ32num = @inferred DofLMM.dof_lmm_numeric(c32, spdB(Float32, c32))
+        @test ρ32num isa Float32
+        @test ρ32num ≈ DofLMM.dof_lmm_numeric(c64, spdB(Float64, c64)) rtol = 1e-4
     end
+
+    # The numeric path validates B's shape: a B that is not s×s raises ArgumentError.
+    cnum = tinycomps(Float64)
+    @test_throws ArgumentError DofLMM.dof_lmm_numeric(cnum, Matrix{Float64}(I, 2, 2))
 
     # Shape-inconsistent components must raise ArgumentError, never a silently-wrong ρ.
     c = tinycomps(Float64)

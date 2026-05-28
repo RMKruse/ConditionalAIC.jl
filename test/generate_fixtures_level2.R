@@ -81,18 +81,26 @@ for (name in names(cases)) {
   r <- cAIC(fit, sigma.penalty = 1L) # analytic = TRUE (default): the steinian Gaussian Bc
   stopifnot("unexpected boundary refit for a reference case" = isFALSE(r$new))
 
+  # analytic = FALSE: external numeric Hessian B (lme4's optimiser Hessian), rescaled C,
+  # shared assembly. This is the cAIC4 ground truth for cAIC.jl's :finitediff B-source,
+  # which self-drives FiniteDiff over the same deviance-scale objective lme4 differentiates.
+  r_numeric <- cAIC(fit, sigma.penalty = 1L, analytic = FALSE)
+  stopifnot("unexpected boundary refit (analytic=FALSE) for a reference case" = isFALSE(r_numeric$new))
+
   obj <- if (isREML(fit)) REMLcrit(fit) else deviance(fit)
   h5createGroup(fixture, name)
   h5write(as.numeric(r$caic), fixture, paste0(name, "/caic"))
   h5write(as.numeric(r$df), fixture, paste0(name, "/df")) # ρ
   h5write(as.numeric(r$loglikelihood), fixture, paste0(name, "/cll"))
+  h5write(as.numeric(r_numeric$caic), fixture, paste0(name, "/caic_numeric"))
+  h5write(as.numeric(r_numeric$df), fixture, paste0(name, "/df_numeric")) # ρ, analytic=FALSE
   h5write(as.integer(cs$reml), fixture, paste0(name, "/reml"))
   h5write(as.numeric(getME(fit, "theta")), fixture, paste0(name, "/theta"))
   h5write(as.numeric(obj), fixture, paste0(name, "/objective"))
 
   cat(sprintf(
-    "  %-12s caic=%.10f  df=%.10f  cll=%.10f  (REML=%s)\n",
-    name, r$caic, r$df, r$loglikelihood, cs$reml
+    "  %-12s caic=%.10f  df=%.10f  df_num=%.10f  cll=%.10f  (REML=%s)\n",
+    name, r$caic, r$df, r_numeric$df, r$loglikelihood, cs$reml
   ))
 }
 

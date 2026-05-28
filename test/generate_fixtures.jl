@@ -33,6 +33,11 @@ Build a `calculateGaussianBc` component set (`docs/math/0002` §3–§6) from a 
 LMM design. `λs[j]` is the relative variance multiplying the `j`-th derivative block
 `Ds[j]` (a q×q symmetric 0/1 pattern, `∂D*/∂(component j)`; §6), so the scaled marginal
 variance is `V₀ = Iₙ + Z (Σⱼ λs[j] Ds[j]) Zᵀ` and `Wⱼ = Z Ds[j] Zᵀ`.
+
+`B` is a synthetic s×s SPD matrix standing in for the optimiser's numeric Hessian — the
+`analytic = FALSE` B-source (`docs/math/0004` §2). It is parametrisation-neutral
+(ADR-0003) and independent of the case rng, so adding it leaves every `analytic = TRUE`
+component byte-identical; the R side feeds it to `calculateGaussianBc(analytic = FALSE)`.
 """
 function componentset(; X, Z, λs, Ds, y, isREML::Bool, sigma_penalty::Int)
     n = size(X, 1)
@@ -48,7 +53,19 @@ function componentset(; X, Z, λs, Ds, y, isREML::Bool, sigma_penalty::Int)
     e = A * y                                          # residual identity e = A y (§0)
     tye = dot(y, e)
     eWelist = [dot(e, W * e) for W in Wlist]
-    return (; n, p, A, V0inv, Wlist, eWelist, tye, e, isREML, sigma_penalty)
+    B = _syntheticB(length(Ds), hash((n, p, length(Ds), isREML)))
+    return (; n, p, A, V0inv, Wlist, eWelist, tye, e, isREML, sigma_penalty, B)
+end
+
+# A seeded, well-conditioned symmetric positive-definite s×s matrix, deterministic in the
+# case's shape signature and independent of the case rng (so the `analytic = TRUE`
+# components stay byte-identical). `M'M + sI` is SPD, so `solve(B)` in `calculateGaussianBc`
+# succeeds. Stands in for the optimiser's numeric Hessian (the `analytic = FALSE` B-source).
+function _syntheticB(s::Int, signature::UInt)
+    rng = MersenneTwister(0x42_0000_0000 ⊻ signature)  # 0x42 = 'B'
+    M = randn(rng, s, s)
+    B = M' * M + s * Matrix{Float64}(I, s, s)
+    return (B + B') / 2                                # exact symmetry for the round-trip
 end
 
 # group-indicator design Z (n×ngroups), `nper[g]` observations in group g, with the
@@ -222,6 +239,7 @@ function write_fixture(path, cases)
             g["eWelist"] = c.eWelist
             g["A"] = c.A
             g["V0inv"] = c.V0inv
+            g["B"] = c.B                               # synthetic numeric Hessian (analytic=FALSE)
             wg = create_group(g, "Wlist")
             for (j, W) in enumerate(c.Wlist)
                 wg["W$j"] = W

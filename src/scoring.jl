@@ -36,9 +36,13 @@ force-refit).
 - `method`: the degrees-of-freedom method. `:auto` (the default) resolves to `:steinian`
   for the Gaussian family — the analytic Greven–Kneib correction. `:bootstrap` is parsed
   and validated but not yet implemented.
-- `hessian`: the Hessian **B**-source. `:analytic` (the default) is the closed-form B, with
-  no derivative dependency. `:forwarddiff` / `:finitediff` are parsed and validated but not
-  yet implemented.
+- `hessian`: the Hessian **B**-source — how the Greven–Kneib Hessian B is obtained.
+  `:analytic` (the default) is the closed-form B, with no derivative dependency.
+  `:finitediff` self-drives finite differences over `MixedModels`' stable objective;
+  `:forwarddiff` rides the experimental `MixedModelsForwardDiffExt`. The numeric sources are
+  three estimators of the same ρ that diverge as documented in `DECISIONS.md`
+  (`:finitediff` reproduces `cAIC4`'s `analytic = FALSE`; `:forwarddiff` differs by holding
+  σ̂² fixed). See `docs/math/0004-numeric-hessian-bsources.md` and ADR-0002.
 - `nboot`: the number of bootstrap draws; valid only with `method = :bootstrap`.
 - `sigmapenalty`: the number of estimated residual-variance parameters added to ρ — `1`
   (the default) for one estimated σ², `0` if the error variance is known.
@@ -50,8 +54,7 @@ force-refit).
 # Throws
 - `ArgumentError` for an unknown `method`/`hessian`, a negative `sigmapenalty`, or `nboot`
   misuse (supplied without `method = :bootstrap`, or non-positive).
-- An error stating the feature is *not yet implemented* for `method = :bootstrap` and for
-  the `:forwarddiff` / `:finitediff` B-sources.
+- An error stating the feature is *not yet implemented* for `method = :bootstrap`.
 
 # Example
 ```jldoctest
@@ -89,16 +92,17 @@ function caic(
         nboot > 0 || throw(ArgumentError("nboot must be positive; got $(nboot)"))
     end
 
-    # ── method / B-source resolution; not-yet-implemented paths error clearly ───────────
+    # ── method resolution; the not-yet-implemented bootstrap path errors clearly ────────
     resolved = method === :auto ? :steinian : method
     resolved === :bootstrap && error(
         "method = :bootstrap (conditional bootstrap) is not yet implemented (delivered in #12)",
     )
-    hessian === :analytic ||
-        error("hessian = :$(hessian) B-source is not yet implemented (delivered in #11); \
-               only :analytic is available")
 
-    # ── the steinian / analytic-B Gaussian scoring spine ────────────────────────────────
+    # ── the steinian Gaussian scoring spine ─────────────────────────────────────────────
+    # The B-source selects how the Greven–Kneib Hessian B is obtained: `:analytic` from the
+    # closed form ([`dof_lmm`](@ref cAIC.DofLMM.dof_lmm)), `:forwarddiff` / `:finitediff`
+    # numerically ([`bhessian`](@ref cAIC.MMInternals.bhessian), fed to [`dof_lmm_numeric`]
+    # (@ref cAIC.DofLMM.dof_lmm_numeric)). All three feed the *same* ρ assembly.
     y = MMInternals.responsevec(m)
     μ = MMInternals.conditionalmean(m)
     comps = Components.gaussiancomponents(
@@ -110,7 +114,12 @@ function caic(
         MMInternals.parmap(m),
         MMInternals.reml(m),
     )
-    ρ = DofLMM.dof_lmm(comps; sigmapenalty=sigmapenalty)
+    ρ = if hessian === :analytic
+        DofLMM.dof_lmm(comps; sigmapenalty=sigmapenalty)
+    else
+        B = MMInternals.bhessian(m, hessian)
+        DofLMM.dof_lmm_numeric(comps, B; sigmapenalty=sigmapenalty)
+    end
     ℓ = Loglik.condloglik(y, μ, MMInternals.sigmahat(m))
     return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, hessian)
 end

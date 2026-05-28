@@ -82,7 +82,21 @@ for (name in case_names) {
 
   rho <- calculateGaussianBc(model, sigma.penalty = as.integer(d$sigma_penalty), analytic = TRUE)
   put(paste0(name, "/rho_ref"), as.numeric(rho))
-  cat(sprintf("  %-22s  rho = %.12g  (n=%d, s=%d, REML=%s)\n", name, rho, n, s, model$isREML))
+
+  # analytic = FALSE: external B (here the synthetic SPD fixture B), rescaled C, shared
+  # assembly. This is the cAIC4 ground truth for cAIC.jl's :forwarddiff / :finitediff
+  # B-sources, which supply B numerically rather than from the closed form.
+  model_numeric <- model
+  model_numeric$B <- matrix(as.numeric(d$B), s, s)
+  rho_numeric <- calculateGaussianBc(
+    model_numeric, sigma.penalty = as.integer(d$sigma_penalty), analytic = FALSE
+  )
+  put(paste0(name, "/rho_ref_numeric"), as.numeric(rho_numeric))
+
+  cat(sprintf(
+    "  %-22s  rho = %.12g  rho_numeric = %.12g  (n=%d, s=%d, REML=%s)\n",
+    name, rho, rho_numeric, n, s, model$isREML
+  ))
 }
 
 put("meta/cAIC4_version", caic4_version)

@@ -206,4 +206,77 @@ function dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer=1) where {T}
     return ρ + T(sigmapenalty)
 end
 
+"""
+    dof_lmm_numeric(c::GaussianComponents{T}, B::AbstractMatrix{T};
+                    sigmapenalty::Integer = 1) -> T
+
+The Greven–Kneib bias-corrected effective degrees of freedom ρ with an **externally
+supplied** Hessian `B` — the port of `cAIC4::calculateGaussianBc(model, sigma.penalty,
+analytic = FALSE)`. This is the assembly behind the `:forwarddiff` and `:finitediff`
+B-sources of [`caic`](@ref): the curvature `B` of the (restricted) profile log-likelihood
+is obtained numerically rather than from the closed form, and only the cross-product `C`
+and the final ρ assembly are recomputed here.
+
+# Mathematical background
+
+With the notation of [`dof_lmm`](@ref) and `nθ = n` (ML) or `nθ = n − p` (REML), the
+numeric path leaves `B` external and rescales the cross-product (doc 0004 §2; cf.
+`calculateGaussianBc` lines 59–70):
+
+```math
+C_{j,:} = \\frac{2\\,n_\\theta}{t^{ye}}
+          \\left( (A W_j e)^{\\mathsf T} - \\frac{e^{\\mathsf T} W_j e}{t^{ye}}\\, e^{\\mathsf T} \\right),
+```
+
+using `eᵀWⱼA = (A Wⱼ e)ᵀ` (both `A` and `Wⱼ` symmetric). The solve `Λ̂ʸ = B⁻¹C`
+(factorisation, no inverse) and the ρ assembly
+
+```math
+\\rho = n - \\operatorname{tr}(A)
+     + \\sum_{j=1}^{s} \\hat\\Lambda^{y}_{j,:} \\cdot (A W_j e)
+     + \\texttt{sigmapenalty}
+```
+
+are **identical** to the analytic path — only the source of `B` and the scaling of `C`
+differ. `B` must be supplied on the deviance scale (−2·log-lik for ML, the REML criterion
+for REML), matching the objective the optimiser differentiates.
+
+# Arguments
+- `c`: the [`GaussianComponents`](@ref) (unweighted Gaussian path, `R = Iₙ`).
+- `B`: the `s×s` numeric Hessian of the (restricted) profile objective at `θ̂`.
+- `sigmapenalty`: number of estimated residual-variance parameters added to ρ (default `1`).
+
+# Returns
+- The scalar effective degrees of freedom `ρ::T`.
+
+# Throws
+- `ArgumentError` if `B` is not `s×s`, where `s = length(c.Wlist)`.
+"""
+function dof_lmm_numeric(
+    c::GaussianComponents{T}, B::AbstractMatrix{T}; sigmapenalty::Integer=1
+) where {T}
+    e, A, Wlist, eWe, tye = c.e, c.A, c.Wlist, c.eWelist, c.tye
+    n = length(e)
+    s = length(Wlist)
+    p = size(c.X, 2)
+    size(B) == (s, s) ||
+        throw(ArgumentError("B must be $s×$s (s = length(Wlist)); got $(size(B))"))
+
+    nθ = c.isREML ? (n - p) : n            # np in calculateGaussianBc's analytic=FALSE branch
+    AWje = [A * (W * e) for W in Wlist]    # A Wⱼ e — (A Wⱼ e)ᵀ = eᵀWⱼA; reused by C and ρ
+
+    C = Matrix{T}(undef, s, n)
+    @inbounds for j in 1:s
+        C[j, :] = (2 * nθ / tye) .* (AWje[j] .- (eWe[j] / tye) .* e)
+    end
+
+    Λy = _lambday(B, C)
+
+    ρ = T(n) - tr(A)                       # ρ₀ = n − tr(R A), unweighted R A = A
+    @inbounds for j in 1:s
+        ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
+    end
+    return ρ + T(sigmapenalty)
+end
+
 end # module DofLMM
