@@ -98,7 +98,53 @@ function caic(
         error("hessian = :$(hessian) B-source is not yet implemented (delivered in #11); \
                only :analytic is available")
 
-    # ── the steinian / analytic-B Gaussian scoring spine ────────────────────────────────
+    # ── singular fit: drop the boundary components and score the reduced refit ───────────
+    # A variance component estimated on the boundary makes the bias-correction spine
+    # degenerate (a nonsensical, even negative, ρ). Mirroring `cAIC4`'s drop-and-refit
+    # (`biasCorrectionGaussian` → `deleteZeroComponents`), the boundary directions are
+    # removed and the cAIC is computed on the reduced model. The reduction cascades — a
+    # reduced refit may itself be singular — until a non-singular model is reached.
+    if MMInternals.issingular(m)
+        mr = m
+        while MMInternals.issingular(mr)
+            next = MMInternals.reduceboundary(mr)
+            # All random-effect directions on the boundary → no random-effects model remains.
+            # Mirror `cAIC4`'s `lm` branch: score the fixed-effects-only fit. At b̂ = 0 the
+            # conditional mean is ŷ = Xβ̂ (so `condloglik` on the original fit is exactly
+            # `cAIC4`'s `getcondLL(original)`), and ρ = p + sigmapenalty (rank of the fixed
+            # effects plus the estimated σ²). No reduced model is carried (`refit = false`).
+            if next === nothing
+                p = size(MMInternals.fixedeffects(m), 2)
+                ρ = T(p + sigmapenalty)
+                ℓ = Loglik.condloglik(
+                    MMInternals.responsevec(m),
+                    MMInternals.conditionalmean(m),
+                    MMInternals.sigmahat(m),
+                )
+                return CAICResult{T,LinearMixedModel{T}}(
+                    -2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, hessian
+                )
+            end
+            mr = next
+        end
+        ρ, ℓ = _steinian(mr, sigmapenalty)
+        return CAICResult{T,LinearMixedModel{T}}(
+            -2ℓ + 2ρ, ρ, ℓ, mr, true, resolved, hessian
+        )
+    end
+
+    # ── non-singular fit: score it as given ──────────────────────────────────────────────
+    ρ, ℓ = _steinian(m, sigmapenalty)
+    return CAICResult{T,LinearMixedModel{T}}(
+        -2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, hessian
+    )
+end
+
+# The steinian / analytic-B Gaussian scoring spine: extract the fit's quantities via the
+# `MMInternals` quarantine, build the Gaussian components, and return the bias-corrected
+# effective degrees of freedom ρ and the conditional log-likelihood ℓ. Shared by the
+# non-singular path and the reduced-model (singular) path.
+function _steinian(m::LinearMixedModel{T}, sigmapenalty::Integer) where {T}
     y = MMInternals.responsevec(m)
     μ = MMInternals.conditionalmean(m)
     comps = Components.gaussiancomponents(
@@ -112,7 +158,7 @@ function caic(
     )
     ρ = DofLMM.dof_lmm(comps; sigmapenalty=sigmapenalty)
     ℓ = Loglik.condloglik(y, μ, MMInternals.sigmahat(m))
-    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, hessian)
+    return ρ, ℓ
 end
 
 """

@@ -70,16 +70,41 @@ pin the REML flag explicitly on both sides and cover both `REML=true` and
 
 ## 2026-05-27 — Singular fits: match cAIC4's drop-and-refit; detection + reduced refit diverge
 
-**Status:** accepted (behaviour); Level-2 tolerance pending validation.
+**Status:** accepted (behaviour and measured Level-2 tolerance, issue #10).
 
 `cAIC.jl` matches `cAIC4`'s singular-fit handling: detect the boundary (via `MixedModels`'
 `issingular`), remove the variance components on the boundary — including a *partial* term (e.g.
 a correlated random intercept+slope where only the slope variance is zero) — refit the reduced
 model, and compute the cAIC on it; `CAICResult` carries the reduced model and a was-refitted
-flag. Two unavoidable numerical divergences from `cAIC4`: (1) *which* fits are flagged singular
+flag. When *every* random-effect direction is on the boundary, no random-effects model remains,
+and the score falls back to the fixed-effects-only one (ρ = rank(FE) + sigma.penalty, the
+conditional log-likelihood of the original fit at b̂ = 0), mirroring `cAIC4`'s `lm` branch.
+
+**Level-2 validation (2026-05-28).** Reference frozen in `test/fixtures/caic_singular_level2.h5`
+(cAIC4 1.1 / lme4 2.0.1), one case per code path: `reduce_ml` — a `(1 + x | g)` fit with `x`
+constant within group, where the slope is unidentifiable and collapses to the boundary in *both*
+ecosystems (the synthetic sample is embedded in the fixture so each scores identical data); and
+`dyestuff2_{ml,reml}` — the canonical `Dyestuff2` fit whose batch variance is zero (all-boundary
+`lm` fallback). Observed worst discrepancy: `reduce_ml` `|Δcaic| ≈ 3.2e-8`, `|Δdf| ≈ 1.0e-9`,
+`|Δcll| ≈ 1.7e-8` (a `(1 | g)` refit, near-identical θ̂ across optimisers); `dyestuff2`
+`|Δcaic| ≈ 3e-11` (the fixed-effects-only score involves no boundary refit). The same derived
+`atol = 1e-3` as the non-singular Level-2 gate applies, with vast margin — a genuine machinery
+error moves the penalty `2ρ` by `≥ O(0.1)`.
+
+**Two unavoidable numerical divergences from `cAIC4`.** (1) *Which* fits are flagged singular
 differs, because `MixedModels`' `issingular` tolerance and lme4's boundary test are not
-identical; (2) the reduced-model refit differs by optimiser (MixedModels vs lme4) — a Level-2
-discrepancy. Both are documented here; the tolerance is measured once fixtures exist.
+identical; (2) the reduced-model refit differs by optimiser (MixedModels vs lme4) — the Level-2
+discrepancy quantified above.
+
+**Why the REML analogue of `reduce_ml` is omitted from the fixture.** On the same x-constant-
+within-group data fitted by REML, lme4's optimiser settles at a small but *non-zero* slope
+variance (sd ≈ 0.03, not flagged singular) where `MixedModels` lands exactly on the boundary, so
+the two ecosystems disagree on *whether* the fit is singular at all — divergence (1) above, in
+its starkest form. There is therefore no common ground-truth case to compare, and forcing one
+would mean comparing `cAIC.jl`'s reduced `(1 | g)` score against `cAIC4`'s full `(1 + x | g)`
+score — a category error, not a tolerance question. The ML construction is used precisely because
+it forces *both* optimisers onto the boundary, giving a genuine shared reference. This is the
+concrete instance of the detection divergence, recorded rather than papered over.
 
 ---
 

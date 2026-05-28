@@ -24,14 +24,25 @@ first.
 | `response(m)`     | exported fn | [`responsevec`]     | response vector y                                        |
 | `fitted(m)`       | exported fn | [`conditionalmean`] | conditional fitted mean ŷ = Xβ̂ + Zb̂                      |
 | `leverage(m)`     | exported fn | [`rho0`]            | per-observation hat-matrix diagonal; ρ₀ = its sum (§2)   |
-| `m.reterms`       | field       | [`retermdesigns`]   | the per-grouping `ReMat`s                                |
+| `m.reterms`       | field       | [`retermdesigns`], [`reduceboundary`] | the per-grouping `ReMat`s                  |
 | `Matrix(re)`      | constructor | [`retermdesigns`]   | dense random-effects design Z block (n×qₜ) per reterm    |
-| `re.λ`            | field       | [`retermlambdas`]   | relative covariance factor λ block (kₜ×kₜ) per reterm    |
+| `re.λ`            | field       | [`retermlambdas`], [`reduceboundary`] | relative covariance factor λ block (kₜ×kₜ) |
 | `m.parmap`        | field       | [`parmap`]          | θ → (reterm, row, col) map — the `lme4` `Lind` analogue  |
+| `issingular(m)`   | exported fn | [`issingular`]      | is a variance component on the boundary (some `λ[d,d]=0`)|
+| `m.feterm`        | field       | [`reduceboundary`]  | the fixed-effects term `FeTerm`, reused by the reduced fit|
+| `m.formula`       | field       | [`reduceboundary`]  | the model formula (bookkeeping for the reduced-fit ctor) |
+| `re.trm/refs/levels/cnames/z/scratch` | fields | [`reduceboundary`] | `ReMat` design pieces, column-subset to rebuild a reduced `ReMat` |
+| `ReMat{T,S}(…)`   | constructor | [`reduceboundary`]  | rebuild a boundary-reduced random-effects term            |
+| `adjA(refs, z)`   | fn          | [`reduceboundary`]  | the `ReMat` adjoint sparse block for the subset design    |
+| `LinearMixedModel(y, feterm, reterms, form)` | constructor | [`reduceboundary`] | assemble the reduced model from reused design objects |
+| `fit!(m)`         | exported fn | [`reduceboundary`]  | refit the reduced model to its MLE/REML estimate          |
 """
 module MMInternals
 
-using MixedModels: LinearMixedModel, ranef, response, fitted, leverage
+using LinearAlgebra: Diagonal, LowerTriangular, I
+using MixedModels:
+    LinearMixedModel, AbstractReMat, ReMat, ranef, response, fitted, leverage, adjA, fit!
+using MixedModels: MixedModels
 
 const PINNED_VERSION = "5.5.1"
 
@@ -168,6 +179,93 @@ function parmap(m::LinearMixedModel)
     pm = m.parmap
     pm isa Vector{NTuple{3,Int}} || _drift("m.parmap", Vector{NTuple{3,Int}}, pm)
     return pm
+end
+
+"""
+    issingular(m::LinearMixedModel) -> Bool
+
+Whether the fit sits on the boundary of the parameter space — a variance component
+estimated at zero (`MixedModels.issingular`). For a `LinearMixedModel` this is exactly the
+condition that some reterm's relative-covariance diagonal `λ[d, d]` is zero, i.e. a
+random-effect direction has collapsed. It is the trigger for the drop-and-refit path
+([`reduceboundary`]); it is the analogue of `cAIC4`'s `theta == 0` test in
+`deleteZeroComponents`. A boundary fit is a first-class, supported case, never an error.
+"""
+function issingular(m::LinearMixedModel)
+    s = MixedModels.issingular(m)
+    s isa Bool || _drift("issingular(m)", Bool, s)
+    return s
+end
+
+"""
+    reduceboundary(m::LinearMixedModel{T}) -> Union{Nothing,LinearMixedModel{T}}
+
+Perform **one** structural reduction of a boundary (singular) fit: drop every
+random-effect direction whose relative-covariance diagonal `λ[d, d]` is zero, then refit
+the resulting reduced model. This is the `MixedModels.jl` analogue of one level of
+`cAIC4`'s `deleteZeroComponents` — the columns on the boundary are removed and the model
+is re-estimated on the surviving random-effects structure.
+
+Per reterm the surviving directions are `keep = {d : λ[d, d] ≠ 0}`:
+- a *partial* drop (some but not all directions kept) column-subsets the `ReMat`
+  (e.g. `(1 + x | g)` with a boundary slope → `(1 + x | g)` reduced to the intercept);
+- a reterm with no surviving direction is dropped whole (e.g. `(1 | g₁) + (1 | g₂)` with
+  `g₂` on the boundary → `(1 | g₁)`).
+
+Each surviving reterm is rebuilt **fresh** (reusing the stored grouping `trm`/`refs`/
+`levels` and the kept design rows, with `λ` reset to the identity for re-estimation), so
+the returned model shares no mutable state with `m`. The fixed-effects term and formula
+are reused; refitting uses the reterms and feterm, not the (now stale) formula, so the
+reduced fit matches a native fit of the reduced model. The reduction may itself land on
+the boundary — the caller iterates ([`caic`](@ref) cascades until non-singular).
+
+Returns the refitted reduced [`LinearMixedModel`](@ref), or `nothing` when **every**
+random-effect direction is on the boundary (no random-effects model remains — the caller
+falls back to the fixed-effects-only score, mirroring `cAIC4`'s `lm` branch).
+"""
+function reduceboundary(m::LinearMixedModel{T}) where {T}
+    reduced = AbstractReMat{T}[]
+    for re in m.reterms
+        re isa ReMat || _drift("m.reterms element", "ReMat", re)
+        S = size(re.λ, 1)
+        keep = [d for d in 1:S if re.λ[d, d] != 0]
+        isempty(keep) && continue
+        push!(reduced, _subsetreterm(re, keep))
+    end
+    isempty(reduced) && return nothing
+    mr = LinearMixedModel(response(m), m.feterm, reduced, m.formula)
+    fit!(mr; progress=false)
+    return mr
+end
+
+# Rebuild a single `ReMat` keeping only the random-effect directions `keep`, with `λ` reset
+# to the identity (its structure — `Diagonal` for an uncorrelated term, `LowerTriangular`
+# for a correlated one — preserved) so the reduced model re-estimates θ from scratch. The
+# grouping (`trm`/`refs`/`levels`) and the kept design rows are reused; `inds` is the linear
+# index pattern θ fills in the reduced `λ` (its lower triangle, or its diagonal).
+function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
+    Snew = length(keep)
+    znew = re.z[keep, :]
+    if re.λ isa Diagonal
+        λnew = Diagonal{T}(I, Snew)
+        indsnew = collect(range(1; step=Snew + 1, length=Snew))
+    else
+        λnew = LowerTriangular(Matrix{T}(I, Snew, Snew))
+        indsnew = [i + (j - 1) * Snew for j in 1:Snew for i in j:Snew]
+    end
+    scratchnew = Matrix{T}(undef, Snew, size(re.scratch, 2))
+    return ReMat{T,Snew}(
+        re.trm,
+        re.refs,
+        re.levels,
+        re.cnames[keep],
+        znew,
+        znew,
+        λnew,
+        indsnew,
+        adjA(re.refs, znew),
+        scratchnew,
+    )
 end
 
 end # module MMInternals
