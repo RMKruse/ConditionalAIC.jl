@@ -6,6 +6,20 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-29 — Added `SpecialFunctions` as a direct runtime dependency
+
+**Reason.** The Poisson conditional log-likelihood (issue #26, M3) requires `loggamma(y + 1)`
+to compute `log(y!)` for real-valued (floating-point) count inputs. `LogExpFunctions` imports
+`loggamma` from `SpecialFunctions` internally but does not re-export it, so `using
+LogExpFunctions: loggamma` fails. The function is not available from Julia Base. Adding
+`SpecialFunctions` directly as an explicit dependency is the correct solution.
+
+`SpecialFunctions` is already present as a transitive dependency (through `LogExpFunctions`);
+this entry promotes it to an explicit, versioned direct dependency (`SpecialFunctions = "2"`)
+with no change to the resolved environment.
+
+---
+
 ## 2026-05-27 — Level-2 tolerance for the analytic Gaussian cAIC: `atol = 1e-3`
 
 **Status:** accepted (measured). Applies to `caic` with `method=:steinian`, `hessian=:analytic`
