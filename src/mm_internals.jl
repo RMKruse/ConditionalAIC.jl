@@ -41,6 +41,12 @@ first.
 | `objective!(m)`   | unexported  | [`bhessian`]        | curried θ→deviance closure (`Base.Fix1`); FD driver target |
 | `setθ!(m, θ)`     | unexported  | [`bhessian`]        | set variance parameters θ — restore θ̂ after FD perturbation |
 | `updateL!(m)`     | unexported  | [`bhessian`]        | refactorise `L` after `setθ!` — completes the restore    |
+| `m.η`             | property    | [`glmmlinpred`]     | linear predictor η (GLMM, n-vector); aliases `m.resp.eta`|
+| `m.resp.mu`       | field       | [`glmmfittedmu`]    | fitted mean μ on the response scale (GLMM, n-vector)     |
+| `m.resp.y`        | field       | [`glmmresponse`]    | response vector y (GLMM, n-vector, on the μ scale)       |
+| `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
+| `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
+| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`]| refit a GLMM copy to a new response vector y              |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -56,6 +62,7 @@ module MMInternals
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
     LinearMixedModel,
+    GeneralizedLinearMixedModel,
     AbstractReMat,
     ReMat,
     ranef,
@@ -64,6 +71,7 @@ using MixedModels:
     leverage,
     adjA,
     fit!,
+    refit!,
     objective!,
     setθ!,
     updateL!
@@ -396,6 +404,104 @@ function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
     mb.optsum.REML = m.optsum.REML
     fit!(mb; progress=false)
     return conditionalmean(mb)
+end
+
+# ── GLMM accessors (M3) ────────────────────────────────────────────────────────
+
+"""
+    glmmlinpred(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The linear predictor `η` (`m.η`, an alias for `m.resp.eta`) — the `n`-vector on the
+link scale satisfying `g(μ) = η` where `g` is the link function and `μ` is the fitted
+mean. Enters the GLMM conditional log-likelihood and the bias-correction routines.
+"""
+function glmmlinpred(m::GeneralizedLinearMixedModel{T}) where {T}
+    η = m.η
+    η isa Vector{T} || _drift("m.η", Vector{T}, η)
+    return η
+end
+
+"""
+    glmmfittedmu(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The fitted mean `μ` on the response scale (`m.resp.mu`) — the `n`-vector satisfying
+`μ = g⁻¹(η)` where `g` is the link function. For a binomial GLMM, `μ` is a vector of
+probabilities; for a Poisson GLMM, the conditional Poisson rates. Used for conditional
+log-likelihood evaluation and as the return value of [`bootstrapglmmfit`](@ref).
+"""
+function glmmfittedmu(m::GeneralizedLinearMixedModel{T}) where {T}
+    μ = m.resp.mu
+    μ isa Vector{T} || _drift("m.resp.mu", Vector{T}, μ)
+    return μ
+end
+
+"""
+    glmmresponse(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The response vector `y` (`m.resp.y`) — the `n`-vector of observed values on the μ
+scale (proportions for binomial-with-weights, raw counts for Poisson, etc.). Used to
+feed the refit loop in [`bootstrapglmmfit`](@ref).
+"""
+function glmmresponse(m::GeneralizedLinearMixedModel{T}) where {T}
+    y = m.resp.y
+    y isa Vector{T} || _drift("m.resp.y", Vector{T}, y)
+    return y
+end
+
+"""
+    glmmdist(m::GeneralizedLinearMixedModel{T, D}) -> D
+
+The GLM distribution family `D` (`m.resp.d`) — the distribution type parameter of the
+`GeneralizedLinearMixedModel{T, D}`. Dispatches the conditional log-likelihood
+(`loglik.jl`) and the bootstrap draw in [`bootstrapglmmfit`](@ref) to the correct
+density/sampler.
+"""
+function glmmdist(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
+    d = m.resp.d
+    d isa D || _drift("m.resp.d", D, d)
+    return d::D
+end
+
+"""
+    glmmfixedefrank(m::GeneralizedLinearMixedModel) -> Int
+
+The rank `p` of the fixed-effects design matrix in the working linear mixed model
+(`m.LMM.feterm.rank`). Used as the full-singularity fallback: when every random-effect
+direction collapses, the working LMM's `p` enters the fixed-effects-only cAIC score.
+"""
+function glmmfixedefrank(m::GeneralizedLinearMixedModel)
+    p = m.LMM.feterm.rank
+    p isa Int || _drift("m.LMM.feterm.rank", Int, p)
+    return p
+end
+
+"""
+    bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) -> Vector{T}
+
+Refit a deep copy of the GLMM `m` to the bootstrap response `y_star` (same design and
+distribution family as `m`, variance parameters re-estimated from scratch via
+`refit!`) and return the conditional fitted mean `μ* = g⁻¹(η*)` of the new fit. The
+original model `m` is not mutated.
+
+# Arguments
+- `m`: the original fitted `GeneralizedLinearMixedModel`; supplies the design, link, and
+  distribution.
+- `y_star`: a bootstrap response vector of length `n = length(glmmresponse(m))`, on the
+  same scale as `m.resp.y` (proportions for binomial-with-weights, counts for Poisson,
+  etc.).
+
+# Returns
+- `Vector{T}` — the conditional fitted mean of the bootstrap fit.
+
+# Throws
+- `ArgumentError` if `length(y_star) ≠ n`.
+"""
+function bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) where {T}
+    n = length(m.resp.y)
+    length(y_star) == n || throw(ArgumentError("y_star length $(length(y_star)) ≠ n = $n"))
+    m_copy = deepcopy(m)
+    refit!(m_copy, y_star; progress=false)
+    return glmmfittedmu(m_copy)
 end
 
 end # module MMInternals
