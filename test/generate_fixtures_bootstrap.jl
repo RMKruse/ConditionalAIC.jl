@@ -35,8 +35,14 @@ penalty — exactly the structure a real `predict(refit(..., newresp = y*))` pro
 The arithmetic is parametrisation-neutral, so these matrices are valid inputs for
 `conditionalBootstrap`'s bias-correction formula regardless of how they were generated.
 """
-function bootstrap_case(rng::AbstractRNG; n::Int, B::Int, sigma::Float64,
-                        mean_scale::Float64=1.0, signal::Float64=0.5)
+function bootstrap_case(
+    rng::AbstractRNG;
+    n::Int,
+    B::Int,
+    sigma::Float64,
+    mean_scale::Float64=1.0,
+    signal::Float64=0.5,
+)
     B >= 2 || throw(ArgumentError("B must be ≥ 2 (cAIC4's (B−1) divisor); got $B"))
     yhat = mean_scale .* randn(rng, n)
     epsY = randn(rng, n, B)
@@ -60,25 +66,41 @@ function build_bootstrap_cases()
     # tracer: n=8, B=20 — moderate signal, σ=1.5
     cases["tracer"] = bootstrap_case(
         MersenneTwister(0x424f_4f54);            # "BOOT"
-        n=8, B=20, sigma=1.5, mean_scale=2.0, signal=0.5,
+        n=8,
+        B=20,
+        sigma=1.5,
+        mean_scale=2.0,
+        signal=0.5,
     )
 
     # mid: n=25, B=100, weaker signal, smaller σ
     cases["mid"] = bootstrap_case(
         MersenneTwister(0x4d_4944_3030);         # "MID00"
-        n=25, B=100, sigma=0.8, mean_scale=1.0, signal=0.3,
+        n=25,
+        B=100,
+        sigma=0.8,
+        mean_scale=1.0,
+        signal=0.3,
     )
 
     # large: n=50, B=500 — exercises the larger Σ; strong signal
     cases["large"] = bootstrap_case(
         MersenneTwister(0x4c_4152_4745);         # "LARGE"
-        n=50, B=500, sigma=2.5, mean_scale=3.0, signal=0.7,
+        n=50,
+        B=500,
+        sigma=2.5,
+        mean_scale=3.0,
+        signal=0.7,
     )
 
     # min_B: B = 2 (the smallest value admitting cAIC4's (B−1) divisor)
     cases["min_B"] = bootstrap_case(
         MersenneTwister(0x4d_494e_5f42);         # "MIN_B"
-        n=6, B=2, sigma=1.0, mean_scale=0.5, signal=0.4,
+        n=6,
+        B=2,
+        sigma=1.0,
+        mean_scale=0.5,
+        signal=0.4,
     )
 
     return cases
