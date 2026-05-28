@@ -46,7 +46,7 @@ first.
 | `m.resp.y`        | field       | [`glmmresponse`]    | response vector y (GLMM, n-vector, on the μ scale)       |
 | `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
 | `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
-| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`]| refit a GLMM copy to a new response vector y              |
+| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -502,6 +502,37 @@ function bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) 
     m_copy = deepcopy(m)
     refit!(m_copy, y_star; progress=false)
     return glmmfittedmu(m_copy)
+end
+
+"""
+    bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+For each observation `i`, refit the model on the response with `yᵢ → 1 − yᵢ` (all
+other entries unchanged) and return the `i`-th fitted mean of that refit.
+
+One deepcopy of `m` is made as a working buffer; `n` sequential `refit!` calls are
+performed on it. The original `m` is not mutated.
+
+This is the refit loop underlying `DofGLMM.dof_glmm_bernoulli` / `cAIC4`'s
+`biasCorrectionBernoulli` (`R/biasCorrectionBernoulli.R:19–21`).
+
+# Returns
+- `Vector{T}` — length `n`; entry `i` is `μ̂ᵢ^{flip}` (the fitted mean at position `i`
+  after the `i`-th label flip), in `(0, 1)`.
+"""
+function bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) where {T}
+    y = glmmresponse(m)
+    n = length(y)
+    m_work = deepcopy(m)
+    y_work = copy(y)
+    μ_flip = Vector{T}(undef, n)
+    for i in 1:n
+        y_work[i] = one(T) - y_work[i]
+        refit!(m_work, y_work; progress=false)
+        μ_flip[i] = glmmfittedmu(m_work)[i]
+        y_work[i] = one(T) - y_work[i]
+    end
+    return μ_flip
 end
 
 end # module MMInternals
