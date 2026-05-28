@@ -143,3 +143,144 @@ end
     @test_throws "m.sigma" drift("m.sigma", Float64, "not-a-float")
     @test_throws "5.5.1" drift("m.sigma", Float64, "not-a-float")
 end
+
+# ── GLMM accessors (M3) ────────────────────────────────────────────────────────
+
+@testitem "glmmlinpred extracts the linear predictor η from a fitted GLMM" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    η = cAIC.MMInternals.glmmlinpred(m)
+
+    @test η isa Vector{Float64}
+    @test length(η) == length(cbpp.herd)
+    @test all(isfinite, η)
+    @inferred Vector{Float64} cAIC.MMInternals.glmmlinpred(m)
+end
+
+@testitem "glmmfittedmu extracts the fitted mean μ on the response scale from a GLMM" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    μ = cAIC.MMInternals.glmmfittedmu(m)
+
+    @test μ isa Vector{Float64}
+    @test length(μ) == length(cbpp.herd)
+    @test all(isfinite, μ)
+    @test all(x -> 0 < x < 1, μ)   # binomial fitted means are probabilities
+    @inferred Vector{Float64} cAIC.MMInternals.glmmfittedmu(m)
+end
+
+@testitem "glmmresponse extracts the response vector y from a GLMM" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    y = cAIC.MMInternals.glmmresponse(m)
+
+    @test y isa Vector{Float64}
+    @test length(y) == length(cbpp.herd)
+    @test all(isfinite, y)
+    @test all(x -> 0 ≤ x ≤ 1, y)   # proportions for binomial-with-weights
+    @inferred Vector{Float64} cAIC.MMInternals.glmmresponse(m)
+end
+
+@testitem "glmmdist extracts the GLM distribution family from a GLMM" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    d = cAIC.MMInternals.glmmdist(m)
+
+    @test d isa Binomial{Float64}
+    @inferred Binomial{Float64} cAIC.MMInternals.glmmdist(m)
+end
+
+@testitem "glmmfixedefrank extracts the rank of the fixed-effects design from a GLMM" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    p = cAIC.MMInternals.glmmfixedefrank(m)
+
+    @test p isa Int
+    @test p ≥ 1
+    @test p == 4   # intercept + period 2 + period 3 + period 4 = 4 columns
+    @inferred Int cAIC.MMInternals.glmmfixedefrank(m)
+end
+
+@testitem "bootstrapglmmfit refits a GLMM with a new response and leaves the original unchanged" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    η_before = copy(m.η)
+    y_orig = cAIC.MMInternals.glmmresponse(m)
+
+    μ_star = cAIC.MMInternals.bootstrapglmmfit(m, y_orig)
+
+    @test μ_star isa Vector{Float64}
+    @test length(μ_star) == length(y_orig)
+    @test all(isfinite, μ_star)
+    @test m.η == η_before   # original model untouched
+end
+
+@testitem "bootstrapglmmfit throws ArgumentError when y_star has wrong length" begin
+    using cAIC
+    using MixedModels
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    bad_y = zeros(Float64, length(cbpp.herd) + 3)
+    @test_throws ArgumentError cAIC.MMInternals.bootstrapglmmfit(m, bad_y)
+end
