@@ -46,6 +46,7 @@ first.
 | `m.resp.y`        | field       | [`glmmresponse`]    | response vector y (GLMM, n-vector, on the μ scale)       |
 | `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
 | `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
+| `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`]| refit a GLMM copy to a new response vector y              |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
@@ -404,6 +405,30 @@ function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
     mb.optsum.REML = m.optsum.REML
     fit!(mb; progress=false)
     return conditionalmean(mb)
+end
+
+# ── GLMM singularity (M3) ─────────────────────────────────────────────────────
+
+"""
+    glmmisfullysingular(m::GeneralizedLinearMixedModel) -> Bool
+
+Whether **every** random-effect variance direction in the GLMM is on the boundary
+(`λ[d, d] = 0` for all `d` in every reterm of the working LMM `m.LMM`). This is the
+GLMM analogue of `reduceboundary(m.LMM) === nothing` for the Gaussian path: when
+fully singular, the GLMM collapses to a plain GLM and the cAIC df is `rank(X)` with
+no σ-penalty (`docs/math/0006-glmm-bias-correction.md §5`).
+
+Returns `false` for partial singularity (some but not all directions on the boundary)
+or for a non-singular fit — those cases are handled by the general M3 influence paths
+(not yet implemented).
+"""
+function glmmisfullysingular(m::GeneralizedLinearMixedModel)
+    for re in m.LMM.reterms
+        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
+        S = size(re.λ, 1)
+        any(d -> re.λ[d, d] != 0, 1:S) && return false
+    end
+    return true
 end
 
 # ── GLMM accessors (M3) ────────────────────────────────────────────────────────

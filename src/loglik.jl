@@ -1,16 +1,32 @@
 """
     cAIC.Loglik
 
-The Gaussian **conditional log-likelihood** — the first term of the conditional AIC
-(`cAIC = −2 ℓ + 2 ρ`). A pure function of the extracted quantities `(y, ŷ, σ̂)`, with **no
-`MixedModels` dependency**, importable and testable in isolation and generic over
-`T <: AbstractFloat`.
+The **conditional log-likelihoods** — the first term of the conditional AIC
+(`cAIC = −2 ℓ + 2 ρ`). Pure functions of the extracted quantities with **no `MixedModels`
+dependency**, importable and testable in isolation and generic over `T <: AbstractFloat`.
 
-The estimand and its numerically-stable form are recorded in
-`docs/math/0003-conditional-loglik.md`; it is the `cAIC.jl` analogue of `cAIC4`'s
-`getcondLL`.
+- Gaussian: [`condloglik`](@ref) — a function of `(y, ŷ, σ̂)`.
+- Poisson: [`condloglik_poisson`](@ref) — a function of `(y, μ̂)`.
+- Bernoulli: [`condloglik_bernoulli`](@ref) — a function of `(y, μ̂)`.
+
+The estimands and their numerically-stable forms are recorded in
+`docs/math/0003-conditional-loglik.md` (Gaussian) and `0006-glmm-bias-correction.md §1`
+(Poisson, Bernoulli); they are the `cAIC.jl` analogues of `cAIC4`'s `getcondLL`.
 """
 module Loglik
+
+using LogExpFunctions: xlogy
+
+# log(k!) = log(1) + log(2) + ... + log(k), accumulated from scratch. Used by
+# condloglik_poisson for the normalising constant; avoids a SpecialFunctions dependency.
+function _logfactorial(yi::T) where {T<:AbstractFloat}
+    k = round(Int, yi)
+    r = 0.0
+    for j in 2:k
+        r += log(j)
+    end
+    return T(r)
+end
 
 """
     condloglik(y::AbstractVector, yhat::AbstractVector, sigma::Real) -> eltype
@@ -71,6 +87,87 @@ function condloglik(y::AbstractVector, yhat::AbstractVector, sigma::Real)
     n = T(length(y))
     σ = T(sigma)
     return -(n / 2) * log(2 * T(π)) - n * log(σ) - ss / (2 * σ * σ)
+end
+
+"""
+    condloglik_poisson(y::AbstractVector, mu::AbstractVector) -> T
+
+Poisson **conditional log-likelihood** `ℓ(y | μ̂)` — the per-family first term of the
+conditional AIC for a Poisson GLMM (math spec: `0006-glmm-bias-correction.md §1`).
+Evaluated at the conditional fitted mean `μ̂ = exp(η̂)` from `cAIC4`'s `getcondLL.merMod`
+(`dpois(y, lambda = μ̂, log = TRUE)` summed over observations):
+
+```math
+\\ell^{\\mathrm{Pois}}(y \\mid \\hat{\\mu})
+  = \\sum_{i=1}^{n} \\bigl[\\, y_i \\log \\hat{\\mu}_i - \\hat{\\mu}_i
+    - \\log(y_i!) \\,\\bigr].
+```
+
+The `y_i log μ̂_i` term is computed via `xlogy` (`= 0` when `y_i = 0`) so that
+zero-count observations (`y_i = 0`) contribute only `−μ̂_i`, not `NaN`.
+
+# Arguments
+- `y`: the count response, length `n`. Values must be non-negative (the Poisson support).
+- `mu`: the conditional fitted mean `μ̂`, length `n`; each element must be strictly positive.
+
+# Returns
+- The scalar `ℓ`, in the promoted floating element type of `y` and `mu`.
+
+# Throws
+- `DomainError` if any `mu[i] ≤ 0`.
+- `DimensionMismatch` if `y` and `mu` do not index alike.
+"""
+function condloglik_poisson(y::AbstractVector, mu::AbstractVector)
+    T = float(promote_type(eltype(y), eltype(mu)))
+    s = zero(T)
+    for i in eachindex(y, mu)
+        yi = T(y[i])
+        μi = T(mu[i])
+        μi > 0 || throw(DomainError(μi, "condloglik_poisson requires μᵢ > 0"))
+        s += xlogy(yi, μi) - μi - _logfactorial(yi)
+    end
+    return s
+end
+
+"""
+    condloglik_bernoulli(y::AbstractVector, mu::AbstractVector) -> T
+
+Bernoulli **conditional log-likelihood** `ℓ(y | μ̂)` — the per-family first term of the
+conditional AIC for a Bernoulli GLMM (math spec: `0006-glmm-bias-correction.md §1`).
+Evaluated at the conditional fitted probability `μ̂ = logit⁻¹(η̂)` from `cAIC4`'s
+`getcondLL.merMod` (`dbinom(y, size=1, prob=μ̂, log=TRUE)` summed over observations):
+
+```math
+\\ell^{\\mathrm{Bern}}(y \\mid \\hat{\\mu})
+  = \\sum_{i=1}^{n} \\bigl[\\, y_i \\log \\hat{\\mu}_i
+    + (1 - y_i)\\log(1 - \\hat{\\mu}_i) \\,\\bigr].
+```
+
+Both log terms are computed via `xlogy` so that boundary labels (`y_i ∈ {0,1}`) yield
+`0` (not `NaN`) for the corresponding inactive term.
+
+# Arguments
+- `y`: the binary response, length `n`. Values in `{0, 1}`.
+- `mu`: the conditional fitted probability `μ̂`, length `n`; each element must satisfy
+  `0 < mu[i] < 1` (open interval — boundary probabilities yield infinite log-likelihood).
+
+# Returns
+- The scalar `ℓ`, in the promoted floating element type of `y` and `mu`.
+
+# Throws
+- `DomainError` if any `mu[i] ∉ (0, 1)`.
+- `DimensionMismatch` if `y` and `mu` do not index alike.
+"""
+function condloglik_bernoulli(y::AbstractVector, mu::AbstractVector)
+    T = float(promote_type(eltype(y), eltype(mu)))
+    s = zero(T)
+    for i in eachindex(y, mu)
+        yi = T(y[i])
+        μi = T(mu[i])
+        0 < μi < 1 || throw(DomainError(μi, "condloglik_bernoulli requires μᵢ ∈ (0,1)"))
+        s += xlogy(yi, μi) + xlogy(1 - yi, 1 - μi)
+    end
+    return s
 end
 
 end # module Loglik

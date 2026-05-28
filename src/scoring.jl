@@ -197,16 +197,67 @@ function _steinian(m::LinearMixedModel{T}, sigmapenalty::Integer, hessian::Symbo
 end
 
 """
-    caic(m::GeneralizedLinearMixedModel; kwargs...)
+    caic(m::GeneralizedLinearMixedModel) -> CAICResult
 
-Scoring a generalised (non-Gaussian) mixed model is not yet supported — the GLMM bias
-correction is milestone M3. Raises `ArgumentError`.
+Score a fitted **generalized** linear mixed model by its **conditional AIC**.
+
+This method currently implements **only the full-singularity fallback** (milestone M3,
+issue #27): when every random-effect variance component is on the boundary (`θ = 0`),
+the GLMM collapses to a plain GLM and the effective degrees of freedom is
+
+```math
+\\rho = \\operatorname{rank}(X),
+```
+
+with **no σ-penalty** (canonical-link Poisson and Bernoulli have fixed dispersion = 1).
+This mirrors `cAIC4`'s `biasCorrectionPoisson.R:14–16` and
+`biasCorrectionBernoulli.R:11–13` (both return `zeroLessModel\$rank` when
+`deleteZeroComponents` reduces the model to a plain GLM).
+
+For non-fully-singular fits (partial or non-singular) this method raises `ArgumentError`
+— the Poisson Chen–Stein influence path, the Bernoulli Efron estimator, and the
+bootstrap fallback are later M3 issues.
+
+# Supported families (M3 scope)
+- **Poisson** (log link): ρ = rank(X).
+- **Bernoulli / binomial (binary)** (logit link): ρ = rank(X).
+
+# Throws
+- `ArgumentError` for non-fully-singular GLMM fits (general M3 path not yet implemented).
+- `ArgumentError` for unsupported distribution families (free-dispersion families are
+  outside M3 scope, matching `cAIC4`'s own "not yet supported" warning).
 """
-function caic(m::GeneralizedLinearMixedModel; kwargs...)
-    return throw(
+function caic(m::GeneralizedLinearMixedModel{T,D}; kwargs...) where {T,D}
+    MMInternals.glmmisfullysingular(m) || throw(
         ArgumentError(
-            "caic currently supports only Gaussian LinearMixedModel fits; GLMM scoring is \
-             not yet implemented (M3)"
+            "caic: GLMM scoring for non-fully-singular fits is not yet implemented (M3). \
+             Only the full-singularity fallback (all θ = 0 → ρ = rank(X)) is supported.",
+        ),
+    )
+    p = MMInternals.glmmfixedefrank(m)
+    ρ = T(p)
+    μ = MMInternals.glmmfittedmu(m)
+    y = MMInternals.glmmresponse(m)
+    d = MMInternals.glmmdist(m)
+    ℓ = _glmm_condloglik_dispatch(d, y, μ)
+    return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
+        -2ℓ + 2ρ, ρ, ℓ, nothing, false, :auto, :na
+    )
+end
+
+# Family dispatch for the GLMM conditional log-likelihood (full-singularity path).
+# Only Poisson and Bernoulli are in M3 scope; all other families raise ArgumentError.
+function _glmm_condloglik_dispatch(::Poisson, y, μ)
+    return Loglik.condloglik_poisson(y, μ)
+end
+function _glmm_condloglik_dispatch(::Bernoulli, y, μ)
+    return Loglik.condloglik_bernoulli(y, μ)
+end
+function _glmm_condloglik_dispatch(d, y, μ)
+    throw(
+        ArgumentError(
+            "caic: unsupported GLMM family $(typeof(d)). Only Poisson (log link) and \
+             Bernoulli (logit link) are in M3 scope."
         ),
     )
 end
