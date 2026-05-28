@@ -199,3 +199,38 @@ being bracketed — so the spec encodes the robust inequality, not "between".)
 - **same-ρ ceiling** `1.5`: every gap is below it, confirming all three remain estimators of one ρ;
   it is > the worst measured `|Δ|` (1.20, slope_ml). A gap above this band would mean a source
   computes a *different* quantity, not a noisier estimate of the same one.
+
+---
+
+## 2026-05-28 — `Random` added as a core dependency for the bootstrap path
+
+**Status:** accepted.
+
+`cAIC.jl` adds `Random` (stdlib) to its core `[deps]` to expose `AbstractRNG` and `default_rng` in
+the public `caic()` signature (the `rng` kwarg) and `randn` in the bootstrap spine. `Random` is a
+stdlib — no binary or compile-time overhead — and the reproducibility contract (seeded `rng` for
+deterministic results) is a first-class user-facing feature, not a test-only concern. Per §3 the
+entry here serves as the formal record.
+
+---
+
+## 2026-05-28 — Bootstrap-vs-analytic convergence gate: `atol=2.0, nboot=2000`
+
+**Status:** accepted.
+
+The Level-2 convergence gate (`caic bootstrap: converges to analytic df with large nboot`) checks
+that the Efron bootstrap df converges to the Greven–Kneib analytic df at high draw count. The
+tolerance is derived from the MC standard error for the sleepstudy random-intercept model:
+
+- `ρ_analytic ≈ 19` (random-intercept + slope, ML).
+- Each draw independently contributes to the covariance sum; the MC standard error of
+  `ρ_bootstrap` at B draws is roughly `σ_MC ≈ C/√B` where `C ≈ 10–15` for this model.
+- At `B = 2000`: `σ_MC ≈ 0.3–0.5`, so `atol = 2.0` is a 4–6σ band. This is conservative
+  enough to survive unlucky seeds yet tight enough to catch a wrong-formula bug (which would
+  produce a bias of several units).
+
+Per the memory note (bootstrap-not-equal-analytic.md): the bootstrap df does *not* converge in
+probability to analytic df in the strict frequentist sense — the two estimate different quantities
+and their means differ by a finite gap. The convergence checked here is that the *empirical* gap
+between a large-sample bootstrap estimate and the analytic value is within the MC noise band, not
+that the two estimators are asymptotically equivalent. Do NOT tighten this tolerance.

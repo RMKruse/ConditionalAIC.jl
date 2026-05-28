@@ -35,7 +35,7 @@ first.
 | `ReMat{T,S}(…)`   | constructor | [`reduceboundary`]  | rebuild a boundary-reduced random-effects term            |
 | `adjA(refs, z)`   | fn          | [`reduceboundary`]  | the `ReMat` adjoint sparse block for the subset design    |
 | `LinearMixedModel(y, feterm, reterms, form)` | constructor | [`reduceboundary`] | assemble the reduced model from reused design objects |
-| `fit!(m)`         | exported fn | [`reduceboundary`]  | refit the reduced model to its MLE/REML estimate          |
+| `fit!(m)`         | exported fn | [`reduceboundary`], [`bootstrapfit`] | refit the reduced / bootstrap model       |
 | `m.θ`             | property    | [`bhessian`]        | fitted θ̂ — the FD evaluation point and restoration check |
 | `ForwardDiff.hessian(m)` | ext fn (experimental) | [`bhessian`] | s×s deviance Hessian (`:forwarddiff`; frozen-σ — see below) |
 | `objective!(m)`   | unexported  | [`bhessian`]        | curried θ→deviance closure (`Base.Fix1`); FD driver target |
@@ -361,6 +361,41 @@ function _bhessian_finitediff(m::LinearMixedModel{T}) where {T}
          refusing to return a Hessian computed against a silently-mutated fit."
     )
     return Matrix{T}(H)
+end
+
+"""
+    bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) -> Vector{T}
+
+Fit a fresh `LinearMixedModel` to the bootstrap response `y_star` (same design as `m`,
+covariance parameters re-estimated from scratch) and return the conditional fitted mean
+`ŷ* = Xβ̂* + Zb̂*` of the new fit. The REML flag of `m` is preserved so the bootstrap
+objective matches the original.
+
+Used by the `:bootstrap` df path in [`caic`](@ref cAIC.caic): each bootstrap draw refits
+with full θ re-estimation, so the covariance penalty captures the estimation-uncertainty
+correction (not just the naive ρ₀).
+
+# Arguments
+- `m`: the original fitted `LinearMixedModel`; supplies the design (`feterm`, `reterms`,
+  `formula`) and REML flag.
+- `y_star`: a bootstrap response vector of length `n = length(response(m))`.
+
+# Returns
+- `Vector{T}` — the conditional fitted mean of the bootstrap fit.
+
+# Throws
+- `ArgumentError` if `length(y_star) ≠ n`.
+"""
+function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
+    length(y_star) == length(response(m)) ||
+        throw(ArgumentError("y_star length $(length(y_star)) ≠ n = $(length(response(m)))"))
+    fresh_reterms = AbstractReMat{T}[
+        _subsetreterm(re, collect(1:size(re.λ, 1))) for re in m.reterms
+    ]
+    mb = LinearMixedModel(y_star, m.feterm, fresh_reterms, m.formula)
+    mb.optsum.REML = m.optsum.REML
+    fit!(mb; progress=false)
+    return conditionalmean(mb)
 end
 
 end # module MMInternals

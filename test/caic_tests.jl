@@ -127,22 +127,149 @@ end
     @test_throws ArgumentError caic(m; method=:bootstrap, nboot=0)    # non-positive nboot
 end
 
-@testitem "caic accepts but defers the unimplemented bootstrap method" tags = [:level2] begin
-    # `:bootstrap` is valid (it parses and validates) but lands on an estimator not delivered
-    # yet (#12). It must fail with a clear "not yet implemented" message — never silently fall
-    # back to the analytic path. (The `:forwarddiff` / `:finitediff` B-sources are delivered
-    # in #11 and are exercised by the numeric-source testitems below.)
-    using MixedModels
-    using cAIC: caic
+@testitem "caic bootstrap: returns a coherent CAICResult (tracer)" tags = [
+    :level2, :bootstrap
+] begin
+    # Tracer bullet for the :bootstrap path (issue #12). Confirms the full spine runs
+    # end-to-end: a seeded, low-B run must return a CAICResult satisfying the cAIC identity
+    # cAIC = −2ℓ + 2ρ. No convergence assertion here — that is Cycle 8.
+    using MixedModels, Random
+    using cAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
-        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        @formula(reaction ~ 1 + days + (1 | subj)),
         MixedModels.dataset(:sleepstudy);
         REML=false,
         progress=false,
     )
-    @test_throws "not yet implemented" caic(m; method=:bootstrap)
+    r = caic(m; method=:bootstrap, nboot=50, rng=Xoshiro(42))
+    @test r isa CAICResult
+    @test r.caic ≈ -2 * r.condloglik + 2 * r.dof
+end
+
+@testitem "caic bootstrap: records method=:bootstrap and bsource=:na in result" tags = [
+    :level2, :bootstrap
+] begin
+    # Provenance check (issue #12): the bootstrap path uses no Hessian B, so bsource must
+    # be :na (not applicable) and method must be :bootstrap.
+    using MixedModels, Random
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    r = caic(m; method=:bootstrap, nboot=50, rng=Xoshiro(42))
+    @test r.method === :bootstrap
+    @test r.bsource === :na
+end
+
+@testitem "caic bootstrap: seeded RNG is reproducible and unseeded varies" tags = [
+    :level2, :bootstrap
+] begin
+    # Reproducibility contract: two calls with the same seed must produce bit-identical dof;
+    # two calls on the default (global) RNG must produce different dof with overwhelming
+    # probability (probability 1 − 2^{−52} for any nboot ≥ 1).
+    using MixedModels, Random
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    r1 = caic(m; method=:bootstrap, nboot=50, rng=Xoshiro(42))
+    r2 = caic(m; method=:bootstrap, nboot=50, rng=Xoshiro(42))
+    @test r1.dof == r2.dof
+
+    r3 = caic(m; method=:bootstrap, nboot=50)
+    r4 = caic(m; method=:bootstrap, nboot=50)
+    @test r3.dof != r4.dof
+end
+
+@testitem "caic bootstrap: type-stable via @inferred" tags = [:level2, :bootstrap] begin
+    using MixedModels, Random
+    using cAIC: caic, CAICResult
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    @test (@inferred caic(m; method=:bootstrap, nboot=20, rng=Xoshiro(1))) isa
+        CAICResult{Float64,LinearMixedModel{Float64}}
+end
+
+@testitem "caic bootstrap: does not mutate the original fit" tags = [:level2, :bootstrap] begin
+    # Mutation contract: bootstrap refits are on fresh models; the original θ̂ must be
+    # untouched after caic returns (same contract as the :finitediff B-source).
+    using MixedModels, Random
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    theta_before = copy(m.theta)
+    mu_before = copy(fitted(m))
+    caic(m; method=:bootstrap, nboot=50, rng=Xoshiro(7))
+    @test m.theta == theta_before
+    @test fitted(m) == mu_before
+end
+
+@testitem "caic bootstrap: default nboot=500 is used when nboot is not supplied" tags = [
+    :level2, :bootstrap
+] begin
+    # When method=:bootstrap is used without nboot, the default (500 draws, matching
+    # cAIC4) must be used rather than erroring. The result must satisfy the cAIC identity.
+    using MixedModels, Random
+    using cAIC: caic, CAICResult
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    r = caic(m; method=:bootstrap, rng=Xoshiro(3))
+    @test r isa CAICResult
+    @test r.caic ≈ -2 * r.condloglik + 2 * r.dof
+end
+
+@testitem "caic bootstrap: converges to analytic df with large nboot" tags = [
+    :level2, :bootstrap
+] begin
+    # Convergence gate (issue #12, DECISIONS.md): with nboot=2000 the bootstrap df must
+    # agree with the analytic Greven-Kneib df to within atol=2.0. The tolerance is derived
+    # from the MC standard error: for the sleepstudy random-intercept model ρ_analytic ≈ 19,
+    # and Monte Carlo noise at B=2000 is ~O(0.5), so atol=2.0 is a 4σ band (see DECISIONS.md).
+    # Memory: do NOT tighten this tolerance; the bootstrap does not converge to analytic df
+    # (see bootstrap-not-equal-analytic.md).
+    using MixedModels, Random
+    using cAIC: caic
+
+    m = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        MixedModels.dataset(:sleepstudy);
+        REML=false,
+        progress=false,
+    )
+    r_analytic = caic(m)
+    r_boot = caic(m; method=:bootstrap, nboot=2000, rng=Xoshiro(99))
+    @test isapprox(r_boot.dof, r_analytic.dof; atol=2.0)
 end
 
 @testitem "caic scores the numeric B-sources coherently and records their provenance" tags = [

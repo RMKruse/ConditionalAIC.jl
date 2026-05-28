@@ -279,4 +279,63 @@ function dof_lmm_numeric(
     return ρ + T(sigmapenalty)
 end
 
+"""
+    efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty) -> T
+
+Efron's covariance penalty (the parametric-bootstrap effective degrees of freedom) —
+the port of `cAIC4`'s `conditionalBootstrap` df estimator. A **Level-1 isolation unit**:
+pure, fit-independent, and testable without any `MixedModels` object.
+
+# Mathematical background
+
+With `n` observations, `B` bootstrap draws, conditional fitted mean `ŷ`, residual
+standard deviation `σ̂`, bootstrap responses `Y*` (`n×B`), and bootstrap conditional
+means `Ŷ*` (`n×B`), Efron's penalty is (Efron 2004, eq. 2; cf. `cAIC4`'s
+`conditionalBootstrap`)
+
+```math
+\\rho = \\frac{1}{\\hat\\sigma^2 B}\\sum_{b=1}^{B}
+        \\bigl(y^{*(b)} - \\hat y\\bigr)^{\\mathsf T}
+        \\bigl(\\hat y^{*(b)} - \\hat y\\bigr)
+        + \\texttt{sigmapenalty}.
+```
+
+Each draw `y*(b) = ŷ + σ̂ ε(b)`, `ε ~ N(0,I)` is a parametric bootstrap sample; the
+corresponding `ŷ*(b)` is the conditional mean of a fresh model fit to `y*(b)`.
+
+# Arguments
+- `yhat`: the `n`-vector conditional fitted mean `ŷ` of the original fit.
+- `sigma`: the residual standard deviation `σ̂ > 0` of the original fit.
+- `Ystar`: an `n×B` matrix whose `b`-th column is `y*(b)`.
+- `Yhatstar`: an `n×B` matrix whose `b`-th column is `ŷ*(b)`.
+- `sigmapenalty`: non-negative integer added to the penalty (default `1` for one estimated σ²).
+
+# Returns
+- The scalar Efron penalty `ρ::T`.
+
+# Throws
+- `ArgumentError` if `Ystar` or `Yhatstar` have the wrong shape, or `sigmapenalty < 0`.
+- `DomainError` if `sigma ≤ 0`.
+"""
+function efron_penalty(
+    yhat::AbstractVector{T},
+    sigma::T,
+    Ystar::AbstractMatrix{T},
+    Yhatstar::AbstractMatrix{T},
+    sigmapenalty::Integer,
+) where {T<:AbstractFloat}
+    n = length(yhat)
+    nstar, B = size(Ystar)
+    n == nstar || throw(ArgumentError("Ystar has $nstar rows but yhat has length $n"))
+    size(Yhatstar) == (nstar, B) ||
+        throw(ArgumentError("Yhatstar shape $(size(Yhatstar)) ≠ Ystar shape ($nstar, $B)"))
+    sigma > 0 || throw(DomainError(sigma, "sigma must be positive"))
+    sigmapenalty >= 0 || throw(ArgumentError("sigmapenalty must be ≥ 0; got $sigmapenalty"))
+    S = zero(T)
+    for b in 1:B
+        S += dot(view(Ystar, :, b) .- yhat, view(Yhatstar, :, b) .- yhat)
+    end
+    return S / (sigma^2 * B) + T(sigmapenalty)
+end
+
 end # module DofLMM

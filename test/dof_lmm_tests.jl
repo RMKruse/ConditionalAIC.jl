@@ -183,9 +183,8 @@ end
     end
 
     # A small SPD Hessian B for the numeric path (s = 1 here): `b > 0` is positive-definite.
-    spdB(::Type{T}, c) where {T} = Matrix{T}(
-        reshape([T(3)], length(c.Wlist), length(c.Wlist))
-    )
+    spdB(::Type{T}, c) where {T} =
+        Matrix{T}(reshape([T(3)], length(c.Wlist), length(c.Wlist)))
 
     # Type stability via @inferred, for both objectives and both float widths — both the
     # analytic (`dof_lmm`) and numeric (`dof_lmm_numeric`) entry points.
@@ -226,5 +225,62 @@ end
     )
     @test_throws ArgumentError DofLMM.GaussianComponents(
         c.X, c.e, c.A, c.V0inv, c.Wlist, [c.eWelist; 0.0], c.tye, false
+    )
+end
+
+@testitem "efron_penalty: arithmetic, type stability, and validation" tags = [
+    :level1, :bootstrap
+] begin
+    # Level-1 isolation test for efron_penalty (issue #12, ADR-0003). The Efron formula is
+    # tested with a hand-computable synthetic example, type-stabilitychecked at Float32/64,
+    # and the validation guards are exercised.
+    using cAIC: DofLMM
+
+    # Hand-computed synthetic: n=2, B=1, yhat=[1,2], sigma=1, sigmapenalty=0
+    # Ystar = [2, 3]ᵀ (one column), Yhatstar = [1.5, 2.5]ᵀ
+    # dot([2-1, 3-2], [1.5-1, 2.5-2]) = dot([1,1],[0.5,0.5]) = 1.0
+    # ρ = 1.0 / (1^2 * 1) + 0 = 1.0
+    yhat = [1.0, 2.0]
+    sigma = 1.0
+    Ystar = reshape([2.0, 3.0], 2, 1)
+    Yhatstar = reshape([1.5, 2.5], 2, 1)
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0) ≈ 1.0
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 1) ≈ 2.0
+
+    # Type stability over Float64 and Float32
+    f64 = DofLMM.efron_penalty(
+        Float64[1, 2],
+        1.0,
+        reshape(Float64[2, 3], 2, 1),
+        reshape(Float64[1.5, 2.5], 2, 1),
+        0,
+    )
+    @test (@inferred DofLMM.efron_penalty(
+        Float64[1, 2],
+        1.0,
+        reshape(Float64[2, 3], 2, 1),
+        reshape(Float64[1.5, 2.5], 2, 1),
+        0,
+    )) isa Float64
+    @test (@inferred DofLMM.efron_penalty(
+        Float32[1, 2],
+        1.0f0,
+        reshape(Float32[2, 3], 2, 1),
+        reshape(Float32[1.5, 2.5], 2, 1),
+        0,
+    )) isa Float32
+
+    # Validation
+    @test_throws DomainError DofLMM.efron_penalty(
+        [1.0, 2.0], 0.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), 0
+    )
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), -1
+    )
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, reshape([2.0, 3.0, 4.0], 3, 1), reshape([1.5, 2.5, 3.5], 3, 1), 0
+    )
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5, 3.5], 3, 1), 0
     )
 end

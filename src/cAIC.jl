@@ -13,6 +13,7 @@ comparison (`anocaic`, M2.5) and search (`stepcaic`, M4) verbs remain stubs. All
 module cAIC
 
 using MixedModels: MixedModel, LinearMixedModel, GeneralizedLinearMixedModel
+using Random: AbstractRNG, default_rng, randn
 
 include("numerics.jl")
 include("loglik.jl")
