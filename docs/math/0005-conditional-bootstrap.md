@@ -10,9 +10,11 @@ estimator should have passed *before* `efron_penalty`, `bootstrapfit`, and the `
 spine were written; written after-the-fact, its job is to surface those decisions.
 
 **This note was written after the estimator shipped (commit `fc8fd02`, issue #12).** That
-is a process failure against CLAUDE.md §7 step 1; the formula divergences in §5 are the
-direct cost of not having had this gate up front. The note is the catch-up record, not a
-post-hoc rationalisation: the §5 dispositions are open items, not closed ones.
+was a process failure against CLAUDE.md §7 step 1; the formula divergences in §5 were the
+direct cost of not having had this gate up front. The §5 dispositions #1, #2, and #3 were
+closed on 2026-05-28 with the addition of the Level-1 shared-input fixture against
+`cAIC4::conditionalBootstrap` (see DECISIONS.md and `test/generate_fixtures_bootstrap.{jl,R}`).
+#4 remains a UX-only open item that does not block correctness.
 
 **Ground-truth sources consulted**
 - `cAIC4` **v1.1** (CRAN, 2025-04-04): `R/conditionalBootstrap.R` (the estimator);
@@ -116,76 +118,75 @@ Two algebraic simplifications:
 
 ## 4. The package's estimator — what is actually shipped
 
-`DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty)` (Level-1, pure) and the
-`_bootstrap` spine in `src/scoring.jl` together compute, with `ŷ` the original fit's
-conditional mean (not the bootstrap row mean),
+`DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty = 0)` (Level-1, pure)
+implements the **same** arithmetic as `cAIC4` in §3:
 
 ```math
-\rho_{\mathrm{cAIC.jl}} =
-  \frac{1}{B\,\hat\sigma^{2}}
+\rho_{\mathrm{efron\_penalty}} =
+  \frac{1}{(B - 1)\,\hat\sigma^{2}}
   \sum_{b = 1}^{B} \sum_{i = 1}^{n}
-    \bigl(y^{*}(b)_{i} - \hat y_{i}\bigr) \bigl(\hat y^{*}(b)_{i} - \hat y_{i}\bigr)
-  + \texttt{sigmapenalty}.
+    \hat y^{*}(b)_{i}\, \bigl(y^{*}(b)_{i} - \bar y^{*}_{i}\bigr)
+  + \texttt{sigmapenalty},
 ```
 
-The draws `y*(b) = ŷ + σ̂ε(b)` are constructed in the spine and have **mean exactly `ŷ`**
-under the parametric-bootstrap law, so the centring point matches the *population* mean of
-the bootstrap distribution rather than its sample estimate. The default `B` (`nboot`) is
-`500`. The same `sigmapenalty` argument as the analytic path is added.
+with `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, `B ≥ 2`, and the default `sigmapenalty = 0`. The `yhat`
+argument is *unused arithmetically* — carried for signature symmetry with the analytic
+and numeric Level-1 units. The `_bootstrap` spine in `src/scoring.jl` constructs the
+draws `y*(b) = ŷ + σ̂ε(b)` (matching `lme4`'s `simulate(..., use.u = TRUE)`), refits each
+through `MMInternals.bootstrapfit` to obtain `ŷ*(b)`, calls `efron_penalty(...,
+sigmapenalty)` with the user-supplied `sigmapenalty` (default `1`), and returns ρ. The
+spine therefore wraps the cAIC4 bare arithmetic in the package's σ²-parameter-count
+convention — see §5 disposition #3.
 
 ---
 
 ## 5. The four divergences from `cAIC4`, and the disposition for each
 
-Pinning the math forces honesty about where the implementation drifts from ground truth.
-Four gaps exist between §3 and §4. None is silently absorbed: each is either to be closed
-in code or recorded in `DECISIONS.md` with a justification. The disposition column is the
-open question this note surfaces.
+Pinning the math forced honesty about where the implementation drifted from ground truth.
+Four gaps existed between §3 and the original §4. None has been silently absorbed: each
+is either closed in code or recorded in `DECISIONS.md`. Dispositions #1, #2, #3 were
+**resolved on 2026-05-28** when the Level-1 shared-input fixture against
+`conditionalBootstrap` was added (see the new DECISIONS.md entry of that date); #4
+remains an open UX decision that is not a correctness gate.
 
-| # | Quantity         | `cAIC4` (ground truth) | `cAIC.jl` (shipped) | Disposition (open) |
-|---|------------------|------------------------|---------------------|--------------------|
-| 1 | Centring point   | bootstrap row mean `ȳ*ᵢ` | original fit `ŷᵢ`    | Reconcile: code-fix to `ȳ*ᵢ`, **or** `DECISIONS.md` entry on the "known-mean variance reduction" argument. |
-| 2 | Denominator      | `B − 1` (sample cov)   | `B` (known-mean MSE) | Pair with #1; the `B − 1` choice is meaningful only together with the row-mean centring. |
-| 3 | `sigmapenalty`   | not added              | added                | Reconcile: code-fix to *not* add, **or** `DECISIONS.md` entry justifying parity with the analytic path's sigmapenalty semantics. |
-| 4 | Default `nboot`  | `max(n, 100)`          | `500`                | Either change the default to `max(n, 100)`, **or** record `500` as a deliberate cross-language difference (the `n`-dependent default is poor UX in Julia; the larger floor reduces MC noise at the cost of compute). |
+| # | Quantity         | `cAIC4` (ground truth) | `cAIC.jl` (shipped) | Disposition |
+|---|------------------|------------------------|---------------------|-------------|
+| 1 | Centring point   | bootstrap row mean `ȳ*ᵢ` | bootstrap row mean `ȳ*ᵢ` | **Closed** (2026-05-28): code-fix to `ȳ*ᵢ`; matches cAIC4. |
+| 2 | Denominator      | `B − 1` (sample cov)   | `B − 1` (sample cov) | **Closed** (2026-05-28): code-fix; matches cAIC4. Requires `B ≥ 2` (validated). |
+| 3 | `sigmapenalty`   | not added              | not added by default; spine adds it explicitly | **Closed** (2026-05-28): `efron_penalty` defaults to `sigmapenalty = 0` (matches cAIC4's bare arithmetic and the Level-1 fixture); the `_bootstrap` spine passes the user-supplied `sigmapenalty` (default `1`) so the user-facing cAIC keeps σ²-parameter-count symmetry with the analytic path. |
+| 4 | Default `nboot`  | `max(n, 100)`          | `500`                | **Open (UX-only).** Not a correctness gate. The 2026-05-28 `DECISIONS.md` entry on the bootstrap-vs-analytic convergence gate already covers why `500` is a sensible Julia-side default; an explicit DECISIONS.md entry pinning the choice is the remaining clean-up. |
 
-**On #1 + #2.** Both estimators target Efron's population ρ; they differ in finite-`B`
-construction. The `cAIC4` form is the unbiased bootstrap sample covariance for `cov(y, ŷ)`
-using only the bootstrap draws. The `cAIC.jl` form exploits the fact that the bootstrap
-draws have a **known mean exactly equal to `ŷ`** (because they are constructed as `ŷ + σ̂ε`,
-not sampled from data), which removes one degree of freedom of centring and replaces the
-`B − 1` divisor with `B`. The two are asymptotically equivalent and within `O(1/√B)` of
-each other at finite `B`, but they are **not** algebraically identical and do not bit-match
-at Level-1 tolerance. The 2026-05-27 `DECISIONS.md` entry's claim that "the Efron
-covariance-penalty arithmetic is checked against `cAIC4`'s internal function on fixed,
-shared inputs at the tight Level-1 tolerance" is therefore not currently realisable as
-stated — there is no fixed-input cAIC4 callable, and even if there were, §3 and §4 would
-not bit-match on identical inputs. Resolving #1 + #2 either eliminates this contradiction
-(by adopting §3 in code) or requires the DECISIONS entry to be reworded to describe what
-the Level-1 test actually checks (the §4 formula against a Julia-side hand-computed value;
-see `test/dof_lmm_tests.jl:231`).
+**Resolution of #1 + #2.** The shipped `efron_penalty` now implements `cAIC4`'s exact
+arithmetic (§3). The two were previously *asymptotically equivalent* but not
+algebraically identical, which made a "Level-1 fixture against `conditionalBootstrap` at
+`rtol = 1e-6` / `atol = 1e-10`" unrealisable. With #1 + #2 closed, that fixture is now
+the bootstrap path's Level-1 correctness gate (see DECISIONS.md 2026-05-28 and
+`test/dof_lmm_tests.jl`: "efron_penalty reproduces cAIC4's conditionalBootstrap arithmetic
+on shared Y*/Ŷ*"). The fixture is generated by `test/generate_fixtures_bootstrap.{jl,R}`:
+Julia writes seeded synthetic `(yhat, sigma, Y*, Ŷ*)` matrices, R applies cAIC4's bias-
+correction arithmetic (lines 23–25 of `conditionalBootstrap.R` v1.1) to them, and Julia
+re-runs `efron_penalty` and compares.
 
-**On #3.** `cAIC4`'s `bcMer.R` routes `sigma.penalty` to the analytic
-`biasCorrectionGaussian` only; the bootstrap path receives no such adjustment. The shipped
-`efron_penalty` adds `sigmapenalty` to the bootstrap ρ, matching the analytic path's
-convention. This is an *intentional design choice*, not a transcription error — but
-`cAIC4` does not do it. Either it is justified (the user-facing semantics of `sigmapenalty`
-across the two methods is more important than `cAIC4` bit-parity) and recorded in
-`DECISIONS.md`, or the bootstrap path drops the `+ sigmapenalty` term and the kwarg becomes
-a `:steinian`-only option.
+**Resolution of #3.** `cAIC4`'s `bcMer.R` routes `sigma.penalty` only to
+`biasCorrectionGaussian`; the bootstrap path receives no such adjustment. The Level-1
+unit `efron_penalty` now matches: its `sigmapenalty` default is `0` (cAIC4's bare
+arithmetic), and the shared-input fixture compares at `sigmapenalty = 0`. The user-facing
+`caic(...; method = :bootstrap, sigmapenalty = 1)` retains parity with the analytic
+path's σ²-parameter-count convention by passing `sigmapenalty` explicitly to
+`efron_penalty` from the `_bootstrap` spine in `src/scoring.jl`. This places the
+package's σ²-parameter-count convention at the *spine* level (where it belongs as
+user-facing semantics), and leaves the *Level-1 unit* a faithful port of cAIC4's
+arithmetic (where bit-parity is the correctness gate).
 
-**On #4.** `max(n, 100)` is `cAIC4`'s choice; `500` is the package's. A flat default is
-simpler in a function signature than a data-dependent one; whether to match `cAIC4`'s
-heuristic is a UX decision, not a correctness one. The 2026-05-28 `DECISIONS.md` entry
-"Bootstrap-vs-analytic convergence gate: `atol = 2.0`, `nboot = 2000`" already records that
-the *test* nboot needs to be high (because the MC standard error is `≈ C / √B` with
-`C ≈ 10–15`); at `n = 180` (sleepstudy), `cAIC4`'s `max(n, 100) = 180` would be far below
-the convergence threshold the package's tests use. The `500` default lies between `100` and
-`2000` and was likely chosen with this MC-noise envelope in mind. Either way: a one-line
-`DECISIONS.md` entry pins it.
-
-The §5 dispositions are **open work** — they should be resolved before the bootstrap path
-is considered "done" by §7 step 6. This note does not prejudge them.
+**On #4 (open, UX-only).** `max(n, 100)` is `cAIC4`'s choice; `500` is the package's. A
+flat default is simpler in a function signature than a data-dependent one; whether to
+match `cAIC4`'s heuristic is a UX decision, not a correctness one. The 2026-05-28
+`DECISIONS.md` entry "Bootstrap-vs-analytic convergence gate: `atol = 2.0`,
+`nboot = 2000`" already records that the *test* nboot needs to be high (because the MC
+standard error is `≈ C / √B` with `C ≈ 10–15`); at `n = 180` (sleepstudy), `cAIC4`'s
+`max(n, 100) = 180` would be far below the convergence threshold the package's tests
+use. The `500` default lies between `100` and `2000` and was chosen with this MC-noise
+envelope in mind. A one-line `DECISIONS.md` entry pinning it is the remaining clean-up.
 
 ---
 
@@ -209,18 +210,18 @@ estimate at large `B` lies inside the MC noise band of the analytic value, the b
 the test's `atol`. Tightening this tolerance is forbidden by that DECISIONS entry; widening
 it would weaken the gate. The number `2.0` is therefore part of the spec, not free.
 
-The §5 disposition affects this gate quantitatively: under #1 + #2 the centred / `(B−1)`
-form has a slightly larger MC variance than the known-mean / `B` form, so an
-implementation flipped to §3 would (marginally) require a wider `atol` or a larger `B`.
-This is the kind of dependency the §7 step-1 doc should have surfaced *before* the
-tolerance was fixed.
+With §5 #1 + #2 closed on 2026-05-28, the shipped form is now the centred / `(B−1)`
+estimator. The atol = 2.0 / B = 2000 gate has been re-verified to hold under the new
+formula (the bootstrap tests in `test/caic_tests.jl` tagged `:bootstrap` continue to
+pass); the slightly larger MC variance of the unbiased sample-covariance form is
+absorbed within the 4–6σ band of the chosen tolerance.
 
 ---
 
 ## 7. Numerical-stability obligations (CLAUDE.md §9)
 
-- The sum in §4 (or §3 if adopted) is a plain `dot` per draw; no log-space transforms
-  needed (it is a sample covariance, not a likelihood).
+- The sum in §3/§4 is a plain `dot` per draw against the row-mean-centred `y*` column;
+  no log-space transforms needed (it is a sample covariance, not a likelihood).
 - The refits are full `MixedModels` fits; the package does not reuse factorisations across
   draws (the design is the same but `y*` changes, so the PLS updates differ). This is a
   performance, not correctness, concern; M3's "make refitting cheap (reuse factorisations)"
@@ -241,12 +242,15 @@ tolerance was fixed.
   preservation in `MMInternals.bootstrapfit`). A bump to either re-opens this note and the
   `mm_internals.jl` table.
 - **Sufficient for the Level-1 isolation unit:** §3 (cAIC4 ground truth) and §4 (shipped
-  formula) together are what `efron_penalty` and any future cAIC4-parity fixture must
-  encode. The current Level-1 test (`test/dof_lmm_tests.jl:231`) checks §4 against a
-  hand-computed value; a §3-parity fixture (computing the cAIC4 expression on identical
-  synthetic `Y*`/`Ŷ*`) is the right addition once #1–#3 are dispositioned.
+  formula) now coincide; `efron_penalty` is a faithful port. The Level-1 test
+  (`test/dof_lmm_tests.jl`: "efron_penalty reproduces cAIC4's conditionalBootstrap
+  arithmetic on shared Y*/Ŷ*") checks parity against `cAIC4` on identical synthetic
+  `(yhat, σ, Y*, Ŷ*)` at `rtol = 1e-6` / `atol = 1e-10`, generated by
+  `test/generate_fixtures_bootstrap.{jl,R}`. A second arithmetic-and-validation test
+  ("efron_penalty: arithmetic, type stability, and validation") covers the formula
+  shape, type stability, and the guards in isolation.
 - **Sufficient for the spine:** §2 fixes the bootstrap draw (`y* = ŷ + σ̂ε`) and the refit
   contract (same design, same REML/ML, fresh `θ̂`) — the `MMInternals.bootstrapfit` spec
   and the `_bootstrap` loop in `src/scoring.jl`.
-- **Open before "done" by §7 step 6:** the four §5 dispositions. Each is either a code
-  change or a `DECISIONS.md` entry; none can stay implicit.
+- **Status of the §5 dispositions:** #1, #2, #3 closed on 2026-05-28 (see DECISIONS.md);
+  #4 (default `nboot`) remains a UX-only open item that does not block correctness.

@@ -228,59 +228,93 @@ end
     )
 end
 
+@testitem "efron_penalty reproduces cAIC4's conditionalBootstrap arithmetic on shared Y*/Ŷ*" tags = [
+    :level1, :bootstrap
+] begin
+    # Level-1 correctness gate (ADR-0003 / docs/math/0005) for the bootstrap path: for
+    # every synthetic case in the committed HDF5 fixture, `efron_penalty` must reproduce
+    # the `ρ` that `cAIC4`'s `conditionalBootstrap` arithmetic computed from the *identical*
+    # `(yhat, sigma, Y*, Ŷ*)` (written into the fixture by `generate_fixtures_bootstrap.R`).
+    # No R in this job — the reference ρ is read straight from the committed fixture.
+    # Tolerance per CLAUDE §6 (Level-1: rtol = 1e-6, atol = 1e-10).
+    using HDF5
+    using cAIC: DofLMM
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    fixture = joinpath(@__DIR__, "fixtures", "bootstrap_level1.h5")
+    @test isfile(fixture)
+
+    h5open(fixture, "r") do f
+        cases = filter(!=("meta"), keys(f))
+        @test !isempty(cases)
+        for name in cases
+            g = f[name]
+            haskey(g, "rho_ref") || error(
+                "fixture case `$name` has no rho_ref — run generate_fixtures_bootstrap.R"
+            )
+
+            yhat = read(g["yhat"])
+            sigma = asscalar(read(g["sigma"]))
+            Ystar = read(g["Ystar"])
+            Yhatstar = read(g["Yhatstar"])
+            # sigmapenalty = 0: the cAIC4 `conditionalBootstrap` arithmetic itself does
+            # *not* add any σ²-parameter count (`R/bcMer.R` routes `sigma.penalty` only
+            # to the analytic path). The package's bootstrap *spine* adds it explicitly.
+            ρ = DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0)
+            ρ_ref = asscalar(read(g["rho_ref"]))
+
+            @test ρ ≈ ρ_ref rtol = 1e-6 atol = 1e-10
+        end
+    end
+end
+
 @testitem "efron_penalty: arithmetic, type stability, and validation" tags = [
     :level1, :bootstrap
 ] begin
-    # Level-1 isolation test for efron_penalty (issue #12, ADR-0003). The Efron formula is
-    # tested with a hand-computable synthetic example, type-stabilitychecked at Float32/64,
-    # and the validation guards are exercised.
+    # Level-1 isolation test for efron_penalty (issue #12, ADR-0003). The cAIC4
+    # `conditionalBootstrap` arithmetic is tested with a hand-computable synthetic
+    # example, type-stability checked at Float32/Float64, and the validation guards
+    # are exercised. The shared-input cAIC4-parity test (above) covers parity against
+    # cAIC4's reference; this test covers the formula, types, and guards in isolation.
     using cAIC: DofLMM
 
-    # Hand-computed synthetic: n=2, B=1, yhat=[1,2], sigma=1, sigmapenalty=0
-    # Ystar = [2, 3]ᵀ (one column), Yhatstar = [1.5, 2.5]ᵀ
-    # dot([2-1, 3-2], [1.5-1, 2.5-2]) = dot([1,1],[0.5,0.5]) = 1.0
-    # ρ = 1.0 / (1^2 * 1) + 0 = 1.0
-    yhat = [1.0, 2.0]
+    # Hand-computed synthetic: n=2, B=2, sigma=1, sigmapenalty=0; `yhat` does not enter
+    # the formula (carried for signature symmetry — see efron_penalty docstring).
+    #   Ystar    = [0 2; 0 2]   →  rowmean = [1, 1]
+    #   centered = [-1 1; -1 1]
+    #   Yhatstar = [0 1; 0 1]
+    #   Σ_b Yhatstar[:,b] · centered[:,b]  =  (0·-1 + 0·-1) + (1·1 + 1·1)  =  2
+    #   ρ = 2 / ((B−1) · σ²) + sigmapenalty  =  2 / (1 · 1) + 0  =  2.0
+    yhat = [10.0, 20.0]                      # arbitrary; unused arithmetically
     sigma = 1.0
-    Ystar = reshape([2.0, 3.0], 2, 1)
-    Yhatstar = reshape([1.5, 2.5], 2, 1)
-    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0) ≈ 1.0
-    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 1) ≈ 2.0
+    Ystar = Float64[0 2; 0 2]
+    Yhatstar = Float64[0 1; 0 1]
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 0) ≈ 2.0
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar, 1) ≈ 3.0
+    # Default sigmapenalty = 0 matches cAIC4's bare arithmetic.
+    @test DofLMM.efron_penalty(yhat, sigma, Ystar, Yhatstar) ≈ 2.0
 
     # Type stability over Float64 and Float32
-    f64 = DofLMM.efron_penalty(
-        Float64[1, 2],
-        1.0,
-        reshape(Float64[2, 3], 2, 1),
-        reshape(Float64[1.5, 2.5], 2, 1),
-        0,
-    )
+    Ystar32 = Float32[0 2; 0 2]
+    Yhatstar32 = Float32[0 1; 0 1]
+    @test (@inferred DofLMM.efron_penalty(Float64[10, 20], 1.0, Ystar, Yhatstar, 0)) isa
+        Float64
     @test (@inferred DofLMM.efron_penalty(
-        Float64[1, 2],
-        1.0,
-        reshape(Float64[2, 3], 2, 1),
-        reshape(Float64[1.5, 2.5], 2, 1),
-        0,
-    )) isa Float64
-    @test (@inferred DofLMM.efron_penalty(
-        Float32[1, 2],
-        1.0f0,
-        reshape(Float32[2, 3], 2, 1),
-        reshape(Float32[1.5, 2.5], 2, 1),
-        0,
+        Float32[10, 20], 1.0f0, Ystar32, Yhatstar32, 0
     )) isa Float32
 
     # Validation
-    @test_throws DomainError DofLMM.efron_penalty(
-        [1.0, 2.0], 0.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), 0
+    @test_throws DomainError DofLMM.efron_penalty([1.0, 2.0], 0.0, Ystar, Yhatstar, 0)
+    @test_throws ArgumentError DofLMM.efron_penalty([1.0, 2.0], 1.0, Ystar, Yhatstar, -1)
+    @test_throws ArgumentError DofLMM.efron_penalty(
+        [1.0, 2.0], 1.0, Float64[0 2; 0 2; 0 4], Float64[0 1; 0 1; 0 2], 0
     )
     @test_throws ArgumentError DofLMM.efron_penalty(
-        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), -1
+        [1.0, 2.0], 1.0, Ystar, Float64[0 1; 0 1; 0 2], 0
     )
+    # B = 1 must fail loudly (cAIC4's (B−1) divisor): no silently-divide-by-zero.
     @test_throws ArgumentError DofLMM.efron_penalty(
-        [1.0, 2.0], 1.0, reshape([2.0, 3.0, 4.0], 3, 1), reshape([1.5, 2.5, 3.5], 3, 1), 0
-    )
-    @test_throws ArgumentError DofLMM.efron_penalty(
-        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5, 3.5], 3, 1), 0
+        [1.0, 2.0], 1.0, reshape([2.0, 3.0], 2, 1), reshape([1.5, 2.5], 2, 1), 0
     )
 end

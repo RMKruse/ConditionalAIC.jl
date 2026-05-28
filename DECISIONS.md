@@ -126,16 +126,19 @@ concrete instance of the detection divergence, recorded rather than papered over
 
 ## 2026-05-27 — Conditional-bootstrap df: validated by isolation + analytic cross-check, not bit-match
 
-**Status:** accepted.
+**Status:** accepted. Superseded in part by the 2026-05-28 entry below (which makes the
+Level-1 isolation claim concrete).
 
 The conditional-bootstrap df (`method=:bootstrap`) is stochastic and cannot bit-match `cAIC4`
 across languages (independent RNGs; per-draw refits also differ by optimiser). Validation
 instead: (1) **Level-1 isolation** — the Efron covariance-penalty arithmetic is checked against
-`cAIC4`'s internal function on fixed, shared inputs at the tight Level-1 tolerance; (2)
-**internal cross-check** — for a Gaussian LMM the bootstrap df must converge to the *exact*
-analytic (steinian) df as `nboot → ∞`, which is the primary correctness gate. Any end-to-end
-comparison against `cAIC4`'s bootstrap is Monte-Carlo-tolerance only and is not a release gate.
-Bootstrap draws are reproducible via an `rng::AbstractRNG` argument.
+`cAIC4`'s internal function on fixed, shared inputs at the tight Level-1 tolerance (closed
+2026-05-28; see below); (2) **internal cross-check** — for a Gaussian LMM the bootstrap df must
+*lie inside the MC noise band of* the analytic (steinian) df at large `nboot`, **not** converge
+to it (the memory note `bootstrap-not-equal-analytic.md` documents the empirically observed
+finite gap between cAIC4's own bootstrap and its own analytic df); any end-to-end comparison
+against `cAIC4`'s bootstrap is Monte-Carlo-tolerance only and is not a release gate. Bootstrap
+draws are reproducible via an `rng::AbstractRNG` argument.
 
 ---
 
@@ -211,6 +214,56 @@ the public `caic()` signature (the `rng` kwarg) and `randn` in the bootstrap spi
 stdlib — no binary or compile-time overhead — and the reproducibility contract (seeded `rng` for
 deterministic results) is a first-class user-facing feature, not a test-only concern. Per §3 the
 entry here serves as the formal record.
+
+---
+
+## 2026-05-28 — Conditional-bootstrap df: Level-1 shared-input fixture against `cAIC4::conditionalBootstrap`
+
+**Status:** accepted (measured). Closes the §5 dispositions #1, #2, #3 of
+`docs/math/0005-conditional-bootstrap.md`.
+
+The Level-1 isolation gate for the bootstrap path is now realised as a **shared-input fixture
+against `cAIC4`'s `conditionalBootstrap` arithmetic** at `rtol = 1e-6` / `atol = 1e-10` — the
+same tight tolerance as the analytic Level-1 gate. Fixture generator pair
+`test/generate_fixtures_bootstrap.{jl,R}` writes seeded synthetic `(yhat, σ, Y*, Ŷ*)` matrices
+on the Julia side and runs cAIC4's bias-correction arithmetic (lines 23–25 of cAIC4 v1.1
+`R/conditionalBootstrap.R`) on the R side, with a textual self-check on the function body to
+pin the formula against silent cAIC4 drift. The Julia test is
+`test/dof_lmm_tests.jl`: *"efron_penalty reproduces cAIC4's conditionalBootstrap arithmetic on
+shared Y*/Ŷ*"*. Four cases at `B ∈ {2, 20, 100, 500}` and `n ∈ {6, 8, 25, 50}` exercise the
+unbiased `(B−1)` divisor (including its minimum), row-mean centring, and the larger Σ-loops.
+
+**What changed in `efron_penalty`.** The Level-1 unit was *previously* the population-mean /
+`B`-divisor estimator (centred on the original fit `ŷ`); it is now `cAIC4`'s sample-covariance
+formula:
+
+```math
+\rho =
+  \frac{1}{(B - 1)\,\hat\sigma^{2}}
+  \sum_{b = 1}^{B} \sum_{i = 1}^{n}
+    \hat y^{*}(b)_{i} \, \bigl(y^{*}(b)_{i} - \bar y^{*}_{i}\bigr)
+  + \texttt{sigmapenalty},
+```
+
+with `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, `B ≥ 2` (validated; raises `ArgumentError` for `B = 1` —
+no silent division by zero), and `sigmapenalty` default **`0`** (matching cAIC4's bare
+arithmetic; the `_bootstrap` spine passes the user-supplied `sigmapenalty` (default `1`)
+explicitly for σ²-parameter-count symmetry with the analytic path). The `yhat` argument is
+retained in the signature for symmetry with the analytic and numeric Level-1 units but is
+unused arithmetically — documented in the function's docstring.
+
+**Why this is not a tolerance loosening.** The previous formula was *asymptotically* equivalent
+to cAIC4's but did not bit-match at finite `B`; a tight Level-1 gate was therefore not
+realisable. The fix is a code change (CLAUDE §2: cAIC4 is ground truth), not a tolerance
+adjustment. The 2026-05-28 bootstrap-vs-analytic convergence gate (`atol = 2.0`, `nboot = 2000`)
+continues to hold under the new formula — the unbiased sample-covariance variant has slightly
+larger MC variance, but it is absorbed inside the 4–6σ band.
+
+**End-to-end (Level-2) parity is still not a release gate.** Cross-language RNG and per-draw
+optimiser differences make bit-match against `cAIC4::cAIC(..., method = "conditionalBootstrap")`
+unachievable; the prior 2026-05-27 entry on "validated by isolation + analytic cross-check"
+remains in force. What changes is that the Level-1 isolation claim is now operational, not
+prospective.
 
 ---
 

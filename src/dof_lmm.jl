@@ -18,6 +18,7 @@ and `Λ̂ʸ = B⁻¹C` is a factorisation-based solve with no explicit inverse (
 module DofLMM
 
 using LinearAlgebra: Symmetric, cholesky, dot, issuccess, tr
+using Statistics: mean
 
 using ..Numerics: traceprod
 
@@ -280,41 +281,56 @@ function dof_lmm_numeric(
 end
 
 """
-    efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty) -> T
+    efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty=0) -> T
 
 Efron's covariance penalty (the parametric-bootstrap effective degrees of freedom) —
-the port of `cAIC4`'s `conditionalBootstrap` df estimator. A **Level-1 isolation unit**:
-pure, fit-independent, and testable without any `MixedModels` object.
+the faithful port of `cAIC4`'s `conditionalBootstrap` df estimator. A **Level-1 isolation
+unit**: pure, fit-independent, and testable without any `MixedModels` object.
 
 # Mathematical background
 
-With `n` observations, `B` bootstrap draws, conditional fitted mean `ŷ`, residual
-standard deviation `σ̂`, bootstrap responses `Y*` (`n×B`), and bootstrap conditional
-means `Ŷ*` (`n×B`), Efron's penalty is (Efron 2004, eq. 2; cf. `cAIC4`'s
-`conditionalBootstrap`)
+With `n` observations, `B ≥ 2` bootstrap draws, residual standard deviation `σ̂`,
+bootstrap responses `Y*` (`n×B`) with row means `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, and
+bootstrap conditional means `Ŷ*` (`n×B`), `cAIC4`'s estimator is
+(`R/conditionalBootstrap.R` v1.1 lines 23–25; cf. `docs/math/0005` §3)
 
 ```math
-\\rho = \\frac{1}{\\hat\\sigma^2 B}\\sum_{b=1}^{B}
-        \\bigl(y^{*(b)} - \\hat y\\bigr)^{\\mathsf T}
-        \\bigl(\\hat y^{*(b)} - \\hat y\\bigr)
+\\rho = \\frac{1}{(B - 1)\\,\\hat\\sigma^{2}}
+        \\sum_{b = 1}^{B} \\sum_{i = 1}^{n}
+          \\hat y^{*}(b)_{i} \\, \\bigl(y^{*}(b)_{i} - \\bar y^{*}_{i}\\bigr)
         + \\texttt{sigmapenalty}.
 ```
 
+The centring is on the **bootstrap row mean** `ȳ*ᵢ` (not the original fit `ŷᵢ`) and
+the divisor is the **unbiased** `B − 1`, making the assembly the standard sample-
+covariance estimator of `cov(y, ŷ) / σ²`. The `yhat` argument is *unused*
+arithmetically — it is carried in the signature for symmetry with the analytic /
+numeric Level-1 units (and for caller readability), and exists to match the original
+fit's conditional mean that the spine constructs `Y*` around.
+
 Each draw `y*(b) = ŷ + σ̂ ε(b)`, `ε ~ N(0,I)` is a parametric bootstrap sample; the
-corresponding `ŷ*(b)` is the conditional mean of a fresh model fit to `y*(b)`.
+corresponding `ŷ*(b)` is the conditional mean of a fresh model fit to `y*(b)`. The
+`sigmapenalty` term is the package's σ²-parameter count, added by the spine for
+interface symmetry with the analytic path; `cAIC4`'s `conditionalBootstrap` itself
+does not add one (`R/bcMer.R` routes `sigma.penalty` only to `biasCorrectionGaussian`).
+The default here is therefore `0` — matching `cAIC4`'s bare arithmetic — and the
+Level-1 fixture compares against the same.
 
 # Arguments
-- `yhat`: the `n`-vector conditional fitted mean `ŷ` of the original fit.
+- `yhat`: the `n`-vector conditional fitted mean `ŷ` of the original fit (carried for
+  signature symmetry; unused arithmetically — see above).
 - `sigma`: the residual standard deviation `σ̂ > 0` of the original fit.
-- `Ystar`: an `n×B` matrix whose `b`-th column is `y*(b)`.
+- `Ystar`: an `n×B` matrix whose `b`-th column is `y*(b)`; `B ≥ 2`.
 - `Yhatstar`: an `n×B` matrix whose `b`-th column is `ŷ*(b)`.
-- `sigmapenalty`: non-negative integer added to the penalty (default `1` for one estimated σ²).
+- `sigmapenalty`: non-negative integer added to the penalty (default `0` — matches
+  `cAIC4`'s arithmetic; the bootstrap *spine* adds the package's σ²-parameter count).
 
 # Returns
 - The scalar Efron penalty `ρ::T`.
 
 # Throws
-- `ArgumentError` if `Ystar` or `Yhatstar` have the wrong shape, or `sigmapenalty < 0`.
+- `ArgumentError` if `Ystar` or `Yhatstar` have the wrong shape, `B < 2`, or
+  `sigmapenalty < 0`.
 - `DomainError` if `sigma ≤ 0`.
 """
 function efron_penalty(
@@ -322,7 +338,7 @@ function efron_penalty(
     sigma::T,
     Ystar::AbstractMatrix{T},
     Yhatstar::AbstractMatrix{T},
-    sigmapenalty::Integer,
+    sigmapenalty::Integer=0,
 ) where {T<:AbstractFloat}
     n = length(yhat)
     nstar, B = size(Ystar)
@@ -331,11 +347,17 @@ function efron_penalty(
         throw(ArgumentError("Yhatstar shape $(size(Yhatstar)) ≠ Ystar shape ($nstar, $B)"))
     sigma > 0 || throw(DomainError(sigma, "sigma must be positive"))
     sigmapenalty >= 0 || throw(ArgumentError("sigmapenalty must be ≥ 0; got $sigmapenalty"))
+    B >= 2 || throw(
+        ArgumentError(
+            "B = size(Ystar, 2) must be ≥ 2 (cAIC4 uses the unbiased (B−1) divisor); got B = $B",
+        ),
+    )
+    rowmean = vec(mean(Ystar; dims=2))                 # n-vector ȳ*ᵢ
     S = zero(T)
     for b in 1:B
-        S += dot(view(Ystar, :, b) .- yhat, view(Yhatstar, :, b) .- yhat)
+        S += dot(view(Yhatstar, :, b), view(Ystar, :, b) .- rowmean)
     end
-    return S / (sigma^2 * B) + T(sigmapenalty)
+    return S / ((B - one(T)) * sigma^2) + T(sigmapenalty)
 end
 
 end # module DofLMM
