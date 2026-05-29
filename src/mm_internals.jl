@@ -47,7 +47,8 @@ first.
 | `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
 | `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
 | `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
-| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`]| refit a GLMM copy to a new response vector y              |
+| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`] | refit a GLMM copy to a new response vector y |
+| `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -527,6 +528,37 @@ function bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) 
     m_copy = deepcopy(m)
     refit!(m_copy, y_star; progress=false)
     return glmmfittedmu(m_copy)
+end
+
+"""
+    refitglmm_eta(m::GeneralizedLinearMixedModel{T}, y_new::Vector{T}) -> Vector{T}
+
+Refit a deep copy of the GLMM `m` to the response `y_new` and return the linear
+predictor `η̂` of the refitted model. The original model `m` is not mutated.
+
+Used by the Poisson Chen–Stein refit loop (`DofGLMM.dof_glmm_poisson`): for each
+nonzero observation `i`, the response is decremented (`yᵢ − 1`) and this function
+returns the new `η̂` so the caller can extract the `i`-th component.
+
+Distinct from [`bootstrapglmmfit`](@ref) which returns the fitted mean `μ̂`; the
+Chen–Stein formula requires the link-scale `η̂`.
+
+# Arguments
+- `m`: the original fitted `GeneralizedLinearMixedModel`.
+- `y_new`: new response vector, length `n = length(glmmresponse(m))`.
+
+# Returns
+- `Vector{T}` — the linear predictor `η̂ = Xβ̂ + Zb̂` of the refitted model.
+
+# Throws
+- `ArgumentError` if `length(y_new) ≠ n`.
+"""
+function refitglmm_eta(m::GeneralizedLinearMixedModel{T}, y_new::Vector{T}) where {T}
+    n = length(m.resp.y)
+    length(y_new) == n || throw(ArgumentError("y_new length $(length(y_new)) ≠ n = $n"))
+    m_copy = deepcopy(m)
+    refit!(m_copy, y_new; progress=false)
+    return glmmlinpred(m_copy)
 end
 
 end # module MMInternals
