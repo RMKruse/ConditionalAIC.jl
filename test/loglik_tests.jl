@@ -62,3 +62,104 @@ end
     @test isnan(cAIC.Loglik.condloglik([NaN, 1.0], [0.0, 1.0], 1.0))
     @test isinf(cAIC.Loglik.condloglik([Inf, 1.0], [0.0, 1.0], 1.0))
 end
+
+# ── GLMM Poisson ─────────────────────────────────────────────────────────────
+
+@testitem "condloglik_poisson matches hand-computed Poisson conditional log-likelihood" tags = [
+    :loglik
+] begin
+    # Single-obs anchor: y=1, μ=1 → 1·log(1) − 1 − log(1!) = 0 − 1 − 0 = −1.
+    @test cAIC.Loglik.condloglik_poisson([1.0], [1.0]) ≈ -1.0 rtol = 1e-6 atol = 1e-10
+
+    # General case cross-checked against the per-observation estimand. y[2]=0 is included
+    # to exercise the xlogy(0, ·) = 0 branch (zero count, nonzero rate). For integer y the
+    # log-factorial is computed as log(factorial(·)) to avoid importing SpecialFunctions.
+    y = [2.0, 0.0, 3.0]
+    μ = [1.5, 2.0, 3.0]
+    logfact = [log(factorial(Int(yi))) for yi in y]  # [log(2), 0, log(6)]
+    ref = sum(y[i] * log(μ[i]) - μ[i] - logfact[i] for i in eachindex(y))
+    @test cAIC.Loglik.condloglik_poisson(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+end
+
+@testitem "condloglik_poisson is type-stable and generic over T" tags = [:loglik] begin
+    y = [2.0, 0.0, 3.0]
+    μ = [1.5, 2.0, 3.0]
+    logfact = [log(factorial(Int(yi))) for yi in y]
+    ref = sum(y[i] * log(μ[i]) - μ[i] - logfact[i] for i in eachindex(y))
+
+    @test (@inferred cAIC.Loglik.condloglik_poisson(y, μ)) ≈ ref
+
+    y32, μ32 = Float32.(y), Float32.(μ)
+    @test cAIC.Loglik.condloglik_poisson(y32, μ32) isa Float32
+    @test (@inferred Float32 cAIC.Loglik.condloglik_poisson(y32, μ32)) ≈ Float32(ref) rtol =
+        1e-4
+end
+
+@testitem "condloglik_poisson rejects invalid μ̂ and mismatched lengths" tags = [:loglik] begin
+    y = [1.0, 2.0]
+    # μ̂ is a Poisson rate and must be strictly positive.
+    @test_throws DomainError cAIC.Loglik.condloglik_poisson(y, [0.0, 1.0])
+    @test_throws DomainError cAIC.Loglik.condloglik_poisson(y, [-0.5, 1.0])
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_poisson(y, [1.0])
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_poisson([1.0], y)
+end
+
+@testitem "condloglik_poisson handles empty input, y=0 entries, and non-finite data" tags = [
+    :loglik
+] begin
+    # Empty input is the empty sum.
+    @test cAIC.Loglik.condloglik_poisson(Float64[], Float64[]) == 0.0
+
+    # y_i = 0 with μ̂_i = c: xlogy(0, c) = 0, so ℓ = −c − log(0!) = −c.
+    @test cAIC.Loglik.condloglik_poisson([0.0], [2.5]) ≈ -2.5 rtol = 1e-6 atol = 1e-10
+
+    # Non-finite counts propagate.
+    @test isnan(cAIC.Loglik.condloglik_poisson([NaN, 1.0], [1.0, 1.0]))
+end
+
+# ── GLMM Bernoulli ───────────────────────────────────────────────────────────
+
+@testitem "condloglik_bernoulli matches hand-computed Bernoulli conditional log-likelihood" tags = [
+    :loglik
+] begin
+    # Single-obs anchor: y=1, μ=0.5 → log(0.5) = −log 2 ≈ −0.6931471805599453.
+    @test cAIC.Loglik.condloglik_bernoulli([1.0], [0.5]) ≈ -log(2.0) rtol = 1e-6 atol = 1e-10
+
+    # General case cross-checked per-observation. y ∈ {0,1} so log(1−μ) is base Julia.
+    y = [0.0, 1.0, 1.0]
+    μ = [0.3, 0.7, 0.9]
+    ref = sum(y[i] * log(μ[i]) + (1 - y[i]) * log(1 - μ[i]) for i in eachindex(y))
+    @test cAIC.Loglik.condloglik_bernoulli(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+end
+
+@testitem "condloglik_bernoulli is type-stable and generic over T" tags = [:loglik] begin
+    y = [0.0, 1.0, 1.0]
+    μ = [0.3, 0.7, 0.9]
+    ref = sum(y[i] * log(μ[i]) + (1 - y[i]) * log(1 - μ[i]) for i in eachindex(y))
+
+    @test (@inferred cAIC.Loglik.condloglik_bernoulli(y, μ)) ≈ ref
+
+    y32, μ32 = Float32.(y), Float32.(μ)
+    @test cAIC.Loglik.condloglik_bernoulli(y32, μ32) isa Float32
+    @test (@inferred Float32 cAIC.Loglik.condloglik_bernoulli(y32, μ32)) ≈ Float32(ref) rtol =
+        1e-4
+end
+
+@testitem "condloglik_bernoulli rejects invalid μ̂ and mismatched lengths" tags = [:loglik] begin
+    y = [0.0, 1.0]
+    # μ̂ is a Bernoulli probability and must be strictly in (0, 1).
+    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli(y, [0.0, 0.5])
+    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli(y, [0.5, 1.0])
+    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli(y, [-0.1, 0.5])
+    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli(y, [0.5, 1.1])
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_bernoulli(y, [0.5])
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_bernoulli([0.0], [0.5, 0.7])
+end
+
+@testitem "condloglik_bernoulli handles empty input and non-finite data" tags = [:loglik] begin
+    # Empty input is the empty sum.
+    @test cAIC.Loglik.condloglik_bernoulli(Float64[], Float64[]) == 0.0
+
+    # Non-finite data propagates.
+    @test isnan(cAIC.Loglik.condloglik_bernoulli([NaN, 1.0], [0.5, 0.5]))
+end
