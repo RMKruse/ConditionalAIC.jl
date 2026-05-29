@@ -13,7 +13,8 @@ analytic Greven–Kneib bias correction assembled end-to-end into a [`CAICResult
 """
 module cAIC
 
-using MixedModels: MixedModel, LinearMixedModel, GeneralizedLinearMixedModel
+using MixedModels:
+    MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli
 using Random: AbstractRNG, default_rng, randn
 
 include("numerics.jl")
