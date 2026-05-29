@@ -164,3 +164,86 @@ end
     # Non-finite data propagates.
     @test isnan(cAIC.Loglik.condloglik_bernoulli([NaN, 1.0], [0.5, 0.5]))
 end
+
+# ── GLMM multi-trial binomial ──────────────────────────────────────────────────
+
+@testitem "condloglik_binomial matches base-R dbinom (multi-trial)" tags = [:loglik] begin
+    # Single-obs anchor: k=1, n=2, μ̂=0.5 → log C(2,1) + log(0.5) + log(0.5)
+    #   = log 2 − 2 log 2 = −log 2.  base R: dbinom(1, 2, 0.5, log=TRUE) = −0.6931472.
+    # The interface takes the proportion y = k/n, so y = 1/2.
+    @test cAIC.Loglik.condloglik_binomial([0.5], [0.5], [2.0]) ≈ -log(2.0) rtol = 1e-6 atol =
+        1e-10
+
+    # base R: dbinom(2, 3, 0.5, log=TRUE) = −0.9808293 (k=2, n=3, μ̂=0.5; y = 2/3).
+    @test cAIC.Loglik.condloglik_binomial([2 / 3], [0.5], [3.0]) ≈ -0.9808292530117262 rtol =
+        1e-6 atol = 1e-10
+
+    # General case. k=[1,2,5], n=[2,4,10], μ̂=[0.5,0.3,0.6]; y = k/n.
+    # base R: sum(dbinom(c(1,2,5), c(2,4,10), c(0.5,0.3,0.6), log=TRUE)) = −3.628836.
+    k = [1.0, 2.0, 5.0]
+    n = [2.0, 4.0, 10.0]
+    μ = [0.5, 0.3, 0.6]
+    y = k ./ n
+    @test cAIC.Loglik.condloglik_binomial(y, μ, n) ≈ -3.628836 rtol = 1e-6 atol = 1e-5
+
+    # Cross-check against the per-observation estimand (a different arrangement than the
+    # kernel's aggregated xlogy/loggamma form, so it checks the aggregation).
+    ref = sum(
+        log(binomial(Int(n[i]), Int(k[i]))) +
+        k[i] * log(μ[i]) +
+        (n[i] - k[i]) * log(1 - μ[i]) for i in eachindex(k)
+    )
+    @test cAIC.Loglik.condloglik_binomial(y, μ, n) ≈ ref rtol = 1e-6 atol = 1e-10
+end
+
+@testitem "condloglik_binomial reduces to Bernoulli when all nᵢ = 1" tags = [:loglik] begin
+    # nᵢ ≡ 1 ⇒ the binomial coefficient vanishes ⇒ identical to condloglik_bernoulli.
+    y = [0.0, 1.0, 1.0]
+    μ = [0.3, 0.7, 0.9]
+    n = ones(3)
+    @test cAIC.Loglik.condloglik_binomial(y, μ, n) ≈ cAIC.Loglik.condloglik_bernoulli(y, μ) rtol =
+        1e-12
+end
+
+@testitem "condloglik_binomial is type-stable and generic over T" tags = [:loglik] begin
+    k = [1.0, 2.0, 5.0]
+    n = [2.0, 4.0, 10.0]
+    μ = [0.5, 0.3, 0.6]
+    y = k ./ n
+    ref = -3.628836
+
+    @test (@inferred cAIC.Loglik.condloglik_binomial(y, μ, n)) ≈ ref rtol = 1e-5
+
+    y32, μ32, n32 = Float32.(y), Float32.(μ), Float32.(n)
+    @test cAIC.Loglik.condloglik_binomial(y32, μ32, n32) isa Float32
+    @test (@inferred Float32 cAIC.Loglik.condloglik_binomial(y32, μ32, n32)) ≈ Float32(ref) rtol =
+        1e-3
+end
+
+@testitem "condloglik_binomial rejects invalid inputs" tags = [:loglik] begin
+    y = [0.5, 0.5]
+    n = [2.0, 2.0]
+    # μ̂ must be strictly in (0, 1).
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial(y, [0.0, 0.5], n)
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial(y, [0.5, 1.0], n)
+    # Trial counts must be strictly positive.
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial(y, [0.5, 0.5], [0.0, 2.0])
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial(y, [0.5, 0.5], [-1.0, 2.0])
+    # kᵢ = nᵢ yᵢ must be a (near-)integer: y = 0.3 with n = 2 → k = 0.6, not integer.
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial([0.3, 0.5], [0.5, 0.5], n)
+    # kᵢ must lie in [0, nᵢ]: y = 1.5 with n = 2 → k = 3 > n.
+    @test_throws DomainError cAIC.Loglik.condloglik_binomial([1.5, 0.5], [0.5, 0.5], n)
+    # Mismatched lengths across any of the three vectors.
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_binomial(y, [0.5], n)
+    @test_throws DimensionMismatch cAIC.Loglik.condloglik_binomial(y, [0.5, 0.5], [2.0])
+end
+
+@testitem "condloglik_binomial handles empty input and boundary counts" tags = [:loglik] begin
+    # Empty input is the empty sum.
+    @test cAIC.Loglik.condloglik_binomial(Float64[], Float64[], Float64[]) == 0.0
+
+    # kᵢ = 0 (all failures) and kᵢ = nᵢ (all successes): xlogy/xlog1py keep the 0·log 0
+    # boundary finite. k=0,n=4,μ̂=0.25 → 4·log(0.75); k=3,n=3,μ̂=0.5 → log C(3,3)+3log(0.5).
+    @test cAIC.Loglik.condloglik_binomial([0.0], [0.25], [4.0]) ≈ 4 * log(0.75) rtol = 1e-10
+    @test cAIC.Loglik.condloglik_binomial([1.0], [0.5], [3.0]) ≈ 3 * log(0.5) rtol = 1e-10
+end

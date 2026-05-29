@@ -172,3 +172,40 @@ end
     @test_throws ArgumentError caic(m)          # :auto + Binomial → unsupported family
     @test_throws ArgumentError caic(m; method=:auto)
 end
+
+@testitem "caic on fully-singular Binomial GLMM (method=:bootstrap): ρ = rank(X), finite cAIC" tags = [
+    :glmm, :level2, :bootstrap
+] begin
+    # Every group carries identical (incid, hsz) data → no between-group variation → θ=0
+    # → fully singular. The full-singularity shortcut returns ρ = rank(X) directly (no
+    # refit, no bootstrap), but it must still evaluate the binomial conditional
+    # log-likelihood (condloglik_binomial) — the path that used to throw for Binomial.
+    # `fast=true` (PIRLS-only) reaches the θ=0 boundary here; the default nAGQ optimiser is
+    # roundoff-limited on this degenerate design and stalls at the θ=1 init.
+    using cAIC
+    using MixedModels
+    using Random: Xoshiro
+    incid = repeat([1, 3], 10)     # each group: proportions 1/4 and 3/4
+    hsz = fill(4, 20)
+    g = repeat(1:10, inner=2)      # 10 identical groups of 2
+    data = (; incid, hsz, g)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ 1 + (1 | g)),
+        data,
+        Binomial();
+        weights=float.(hsz),
+        progress=false,
+        fast=true,
+    )
+
+    @test issingular(m)   # precondition: optimizer must have found θ=0
+
+    r = caic(m; method=:bootstrap, nboot=20, rng=Xoshiro(42))
+    @test r.dof == 1.0              # rank(X) = 1 for intercept-only; no +1 σ-penalty
+    @test !r.refit                  # full-singularity path does not refit/bootstrap
+    @test r.reducedmodel === nothing
+    @test isfinite(r.condloglik)    # the previously-dead binomial loglik path
+    @test isfinite(r.caic)
+    @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-10
+end

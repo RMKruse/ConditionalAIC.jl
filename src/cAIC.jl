@@ -16,7 +16,7 @@ remains a stub. All access to `MixedModels.jl` internals is quarantined in the
 module cAIC
 
 using MixedModels:
-    MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli
+    MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli, Binomial
 using Random: AbstractRNG, default_rng, randn
 
 include("numerics.jl")

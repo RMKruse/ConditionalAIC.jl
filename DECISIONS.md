@@ -6,6 +6,60 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-29 — Multi-trial binomial conditional log-likelihood: correct `dbinom` vs `cAIC4`'s defective `getcondLL.merMod`
+
+**Status:** accepted. Applies to `caic(m::GeneralizedLinearMixedModel; method=:bootstrap)` for
+a multi-trial Binomial family (`|unique(y)| > 2`, e.g. the CBPP `incid/hsz ~ period + (1|herd)`
+fit with `weights = hsz`). Kernel: `Loglik.condloglik_binomial`. Wired through
+`_glmm_condloglik_dispatch` (`src/scoring.jl`).
+
+**The `cAIC4` defect.** `getcondLL.merMod` (`cAIC4` 1.1, `R/getcondLL.R`) computes the binomial
+conditional log-likelihood as
+
+```r
+sum(dbinom(x = getME(object, "y"), size = length(unique(getME(object, "y"))) - 1,
+           prob = getME(object, "mu"), log = TRUE))
+```
+
+`size = length(unique(y)) - 1` equals the trial count *only* for Bernoulli (`unique(y) = {0,1}`
+→ `size = 1`). For a multi-trial binomial the response `y` is a proportion in `[0,1]`, so
+`dbinom` receives a **non-integer** `x` and a `size` unrelated to the trials, returns `0` (R
+warns "non-integer x = ..."), and `log = -Inf`. `cAIC4` therefore yields a **non-finite**
+conditional log-likelihood — and hence a non-finite assembled `cAIC` — for every multi-trial
+binomial, even though its `R/cAIC.R:247–253` guard redirects the *df* route to
+`conditionalBootstrap`. The defect is in `getcondLL`, which the guard does not touch.
+
+**The deviation (CLAUDE.md §1, §10).** Copying the bug would propagate `-Inf`; CLAUDE.md §1
+(mathematical correctness over fidelity to a known-wrong reference) and §10 (a provable `cAIC4`
+defect is resolved by a documented deviation, never silently) require the correct density.
+`cAIC.jl` evaluates the true binomial log-density at the actual per-observation trial counts
+`nᵢ` — the prior weights `m.resp.wts` exposed by `MMInternals.glmmpriorweights` — and success
+counts `kᵢ = nᵢ·yᵢ`:
+
+```
+ℓ = Σᵢ [ log C(nᵢ, kᵢ) + kᵢ·log μ̂ᵢ + (nᵢ−kᵢ)·log(1−μ̂ᵢ) ],   kᵢ = nᵢ·yᵢ.
+```
+
+This is base R's `sum(dbinom(kᵢ, nᵢ, μ̂ᵢ, log = TRUE))` (the *correct* density, not the
+`getcondLL` wrapper) and collapses to the Bernoulli `ℓ_cond` when `nᵢ ≡ 1`. The estimand is
+pinned in `docs/math/0006-glmm-bias-correction.md §1.1`.
+
+**Validation.** Level-1 only, against the **base-R `dbinom` arithmetic** (not `cAIC4`'s
+`getcondLL`) at the Level-1 tolerance `rtol = 1e-6 / atol = 1e-10`. Following the precedent of
+`condloglik_poisson`/`condloglik_bernoulli` (and `docs/math/0003-conditional-loglik.md §3`), the
+reference is the per-observation density `lchoose(nᵢ,kᵢ) + kᵢ·log μ̂ᵢ + (nᵢ−kᵢ)·log(1−μ̂ᵢ)`
+re-stated inline in the test — a different arrangement from the kernel's aggregated `xlogy`/
+`loggamma` form, so it cross-checks the aggregation — anchored by hand-computed scalars that
+equal base-R `dbinom(k, n, p, log = TRUE)` (e.g. `n=2,k=1,p=0.5 → log 0.5`). No HDF5 fixture is
+introduced, matching how the other GLMM log-likelihood kernels are validated. There is **no**
+`cAIC4` Level-2 cross-check for this value: `cAIC4`'s own number is `-Inf`, so no finite
+reference exists to match. The bootstrap *df* it feeds is unaffected and keeps its existing
+Level-2 fixture against `conditionalBootstrap` (`atol = 2.0`, the 2026-05-28 gate). The deviation
+is scoped to `method=:bootstrap`; `method=:auto` on a multi-trial binomial still throws
+`ArgumentError` (no analytic df), matching `cAIC4`'s family scope.
+
+---
+
 ## 2026-05-29 — Added `SpecialFunctions` as a direct runtime dependency
 
 **Reason.** The Poisson conditional log-likelihood (issue #26, M3) requires `loggamma(y + 1)`

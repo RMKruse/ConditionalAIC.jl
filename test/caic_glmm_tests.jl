@@ -206,6 +206,39 @@ end
     @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-12
 end
 
+@testitem "caic GLMM method=:bootstrap on multi-trial Binomial: finite cAIC, identity holds" tags = [
+    :glmm, :level2, :bootstrap
+] begin
+    # Multi-trial Binomial (CBPP) has no analytic df and cAIC4's getcondLL is defective
+    # for it (DECISIONS.md 2026-05-29). The bootstrap path must nonetheless produce a
+    # FINITE conditional log-likelihood (via condloglik_binomial) and a finite cAIC
+    # satisfying the identity — i.e. the path is reachable end-to-end through caic, not
+    # only through DofGLMM.dof_glmm_bootstrap. nboot=20 for speed.
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    @test !issingular(m)
+
+    r = caic(m; method=:bootstrap, nboot=20, rng=Xoshiro(42))
+    @test r isa CAICResult{Float64,<:GeneralizedLinearMixedModel}
+    @test r.method == :bootstrap
+    @test r.bsource == :na
+    @test r.dof > 0
+    @test isfinite(r.condloglik)   # the bug: this used to throw before any df was computed
+    @test isfinite(r.caic)
+    @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-12
+end
+
 # ── argument validation ────────────────────────────────────────────────────────
 
 @testitem "caic GLMM raises ArgumentError for unsupported method" tags = [:glmm, :level2] begin

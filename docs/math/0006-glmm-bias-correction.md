@@ -70,7 +70,7 @@ divisor of §4. Families with a *free* dispersion parameter are out of scope (ma
 
 ---
 
-## 1. Conditional log-likelihood ℓ_cond (Poisson and Bernoulli)
+## 1. Conditional log-likelihood ℓ_cond (Poisson, Bernoulli, multi-trial binomial)
 
 Transcribed from `getcondLL.merMod` (`R/getcondLL.R:47–66`), evaluated at the fitted
 conditional mean `μ̂` (the `getME(object, "mu")` value), **not** via the PIRLS marginal
@@ -108,6 +108,39 @@ coefficient is `1` (`log = 0`), and this collapses to
 `ℓ_cond` is evaluated on the model `cAIC` actually penalises: if the boundary reduction of
 §5 produced a reduced model, `cAIC4` calls `getcondLL(newModel)` (`R/cAIC.R:270–271`), so
 the conditional log-lik is taken on the **reduced** fit, consistent with its df.
+
+### 1.1 Multi-trial binomial — a documented deviation from `cAIC4`
+
+The §1 `getcondLL.merMod` binomial branch is **only correct for Bernoulli**. With `size =
+|unique(y)| − 1` and `x = getME(object, "y")`, a *multi-trial* binomial (response stored as
+a proportion `yᵢ = kᵢ/nᵢ ∈ [0,1]`, trial counts `nᵢ` in the prior weights) feeds `dbinom` a
+**non-integer** `x` and a `size` unrelated to the trials. `dbinom` then returns `0` (R warns
+"non-integer x"), so `log = −∞`: `cAIC4` has **no finite conditional log-likelihood for
+multi-trial binomial** (and its `R/cAIC.R:247–253` guard only redirects the *df* route to the
+bootstrap — it does **not** repair `getcondLL`). The df bootstrap (§5) is thus reachable in
+`cAIC4` but the assembled `cAIC` is not finite for this family.
+
+`cAIC.jl` is the bootstrap-df path's *only* consumer of this log-likelihood, and it must
+produce a finite cAIC. Per CLAUDE.md §1 (mathematical correctness) and §10 (a provable
+`cAIC4` defect is resolved by a **documented deviation**, not by copying the bug), `cAIC.jl`
+uses the **correct** binomial density evaluated at the true trial counts `nᵢ` (the prior
+weights `m.resp.wts`, `mm_internals.jl::glmmpriorweights`) and the success counts
+`kᵢ = nᵢ yᵢ`:
+
+```math
+\ell_{\mathrm{cond}}^{\mathrm{Bin}}(y \mid \hat\mu)
+  = \sum_{i=1}^{n} \Bigl[\, \log \binom{n_i}{k_i}
+      + k_i \log \hat\mu_i + (n_i - k_i)\log(1 - \hat\mu_i) \,\Bigr],
+  \qquad k_i = n_i\,y_i ,
+```
+
+with `log C(nᵢ, kᵢ) = lgamma(nᵢ+1) − lgamma(kᵢ+1) − lgamma(nᵢ−kᵢ+1)`. This is exactly base
+R's `sum(dbinom(kᵢ, nᵢ, μ̂ᵢ, log = TRUE))` — the **correct** binomial density, *not* `cAIC4`'s
+`getcondLL` wrapper — and is the Level-1 reference for the kernel
+(`Loglik.condloglik_binomial`). For `nᵢ ≡ 1` the coefficient vanishes and it collapses to the
+Bernoulli `ℓ_cond` above, so Bernoulli stays on its dedicated kernel and only `|unique(y)| > 2`
+binomials take this path. The deviation is logged in `DECISIONS.md` (2026-05-29); there is no
+`cAIC4` Level-2 cross-check for this value because `cAIC4`'s own value is `−∞`.
 
 ---
 
@@ -282,6 +315,11 @@ where issue #24's formula prose does not match `R/`. Per CLAUDE.md §2 the **sou
 truth**, and the project decision is explicit: **do not diverge from `cAIC4`**. §3–§5 above
 encode the source verbatim; both points are **settled in favour of the source** (no
 `DECISIONS.md` entry needed — there is no divergence to record).
+
+These two are paraphrase-vs-source, not `cAIC.jl`-vs-`cAIC4`. The *one* place `cAIC.jl`
+genuinely diverges from the `cAIC4` source is the **multi-trial binomial conditional
+log-likelihood** of §1.1 — where the `cAIC4` source is provably defective (`−∞`) and the
+deviation is recorded in `DECISIONS.md` (2026-05-29) per CLAUDE.md §10.
 
 | # | Quantity | Issue #24 prose | `cAIC4` source (ground truth, adopted) | Decision |
 |---|---|---|---|---|

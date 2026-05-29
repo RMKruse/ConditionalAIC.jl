@@ -208,7 +208,9 @@ Score a fitted **generalized** linear mixed model by its **conditional AIC**
 The conditional log-likelihood `ℓ_cond` is the log-probability of `y` under the
 conditional response distribution `f(μ̂)` (Poisson: [`condloglik_poisson`](@ref
 cAIC.Loglik.condloglik_poisson); Bernoulli: [`condloglik_bernoulli`](@ref
-cAIC.Loglik.condloglik_bernoulli)). The effective df `ρ` is estimated by the method
+cAIC.Loglik.condloglik_bernoulli); multi-trial Binomial: [`condloglik_binomial`](@ref
+cAIC.Loglik.condloglik_binomial), which deviates from `cAIC4`'s defective binomial
+`getcondLL` — see `DECISIONS.md`). The effective df `ρ` is estimated by the method
 selected by `method`:
 
 - **`:auto`** (the default) dispatches by family:
@@ -218,8 +220,9 @@ selected by `method`:
     cAIC.DofGLMM.dof_glmm_bernoulli)), the `cAIC4` `biasCorrectionBernoulli` analogue.
   - Other families: `ArgumentError` — use `method = :bootstrap`.
 - **`:bootstrap`** → conditional bootstrap df ([`dof_glmm_bootstrap`](@ref
-  cAIC.DofGLMM.dof_glmm_bootstrap)). Works for all supported families. `nboot` sets the
-  draw count (default `max(n, 100)`).
+  cAIC.DofGLMM.dof_glmm_bootstrap)). Works for every bootstrap-supported family (Poisson,
+  Bernoulli, multi-trial Binomial — the families `glmmconddraw` can simulate). `nboot` sets
+  the draw count (default `max(n, 100)`).
 
 **Full-singularity shortcut.** When every variance component is on the boundary (θ = 0),
 the GLMM collapses to a plain GLM: `ρ = rank(X)` is returned directly with no refit,
@@ -278,7 +281,9 @@ function caic(
     d = MMInternals.glmmdist(m)
     y = MMInternals.glmmresponse(m)
     μ = MMInternals.glmmfittedmu(m)
-    ℓ = _glmm_condloglik_dispatch(d, y, μ)
+    # `glmmpriorweights` carries the per-observation binomial trial counts (empty for
+    # Poisson/Bernoulli); only the Binomial branch consumes them.
+    ℓ = _glmm_condloglik_dispatch(d, y, μ, MMInternals.glmmpriorweights(m))
 
     # Full-singularity: every θ = 0 → GLMM collapses to plain GLM; ρ = rank(X), no σ-penalty.
     if MMInternals.glmmisfullysingular(m)
@@ -301,18 +306,25 @@ function caic(
     )
 end
 
-# Family dispatch for the GLMM conditional log-likelihood (Poisson and Bernoulli).
-function _glmm_condloglik_dispatch(::Poisson, y, μ)
+# Family dispatch for the GLMM conditional log-likelihood. `wts` are the binomial trial
+# counts (`glmmpriorweights`); ignored by Poisson/Bernoulli, consumed by Binomial.
+function _glmm_condloglik_dispatch(::Poisson, y, μ, wts)
     return Loglik.condloglik_poisson(y, μ)
 end
-function _glmm_condloglik_dispatch(::Bernoulli, y, μ)
+function _glmm_condloglik_dispatch(::Bernoulli, y, μ, wts)
     return Loglik.condloglik_bernoulli(y, μ)
 end
-function _glmm_condloglik_dispatch(d, y, μ)
+function _glmm_condloglik_dispatch(::Binomial, y, μ, wts)
+    # Multi-trial binomial — the correct binomial density, deviating from cAIC4's defective
+    # getcondLL (DECISIONS.md 2026-05-29; docs/math/0006 §1.1). nᵢ are the prior weights.
+    return Loglik.condloglik_binomial(y, μ, wts)
+end
+function _glmm_condloglik_dispatch(d, y, μ, wts)
     throw(
         ArgumentError(
-            "caic: unsupported GLMM family $(typeof(d)). Only Poisson (log link) and \
-             Bernoulli (logit link) are in M3 scope."
+            "caic: unsupported GLMM family $(typeof(d)). Supported conditional \
+             log-likelihoods: Poisson (log link), Bernoulli and multi-trial Binomial \
+             (logit link)."
         ),
     )
 end
