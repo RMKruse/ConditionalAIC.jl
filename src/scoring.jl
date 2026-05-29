@@ -197,56 +197,111 @@ function _steinian(m::LinearMixedModel{T}, sigmapenalty::Integer, hessian::Symbo
 end
 
 """
-    caic(m::GeneralizedLinearMixedModel) -> CAICResult
+    caic(m::GeneralizedLinearMixedModel; method=:auto, nboot=nothing, rng=default_rng()) -> CAICResult
 
-Score a fitted **generalized** linear mixed model by its **conditional AIC**.
-
-This method currently implements **only the full-singularity fallback** (milestone M3,
-issue #27): when every random-effect variance component is on the boundary (`θ = 0`),
-the GLMM collapses to a plain GLM and the effective degrees of freedom is
+Score a fitted **generalized** linear mixed model by its **conditional AIC**
 
 ```math
-\\rho = \\operatorname{rank}(X),
+\\mathrm{cAIC} = -2\\,\\ell_{\\mathrm{cond}}(y \\mid \\hat b, \\hat\\beta, \\hat\\theta) + 2\\rho.
 ```
 
-with **no σ-penalty** (canonical-link Poisson and Bernoulli have fixed dispersion = 1).
-This mirrors `cAIC4`'s `biasCorrectionPoisson.R:14–16` and
-`biasCorrectionBernoulli.R:11–13` (both return `zeroLessModel\$rank` when
-`deleteZeroComponents` reduces the model to a plain GLM).
+The conditional log-likelihood `ℓ_cond` is the log-probability of `y` under the
+conditional response distribution `f(μ̂)` (Poisson: [`condloglik_poisson`](@ref
+cAIC.Loglik.condloglik_poisson); Bernoulli: [`condloglik_bernoulli`](@ref
+cAIC.Loglik.condloglik_bernoulli)). The effective df `ρ` is estimated by the method
+selected by `method`:
 
-For non-fully-singular fits (partial or non-singular) this method raises `ArgumentError`
-— the Poisson Chen–Stein influence path, the Bernoulli Efron estimator, and the
-bootstrap fallback are later M3 issues.
+- **`:auto`** (the default) dispatches by family:
+  - **Poisson** → Chen–Stein influence df ([`dof_glmm_poisson`](@ref
+    cAIC.DofGLMM.dof_glmm_poisson)), the `cAIC4` `biasCorrectionPoisson` analogue.
+  - **Bernoulli** → Efron's Steinian df ([`dof_glmm_bernoulli`](@ref
+    cAIC.DofGLMM.dof_glmm_bernoulli)), the `cAIC4` `biasCorrectionBernoulli` analogue.
+  - Other families: `ArgumentError` — use `method = :bootstrap`.
+- **`:bootstrap`** → conditional bootstrap df ([`dof_glmm_bootstrap`](@ref
+  cAIC.DofGLMM.dof_glmm_bootstrap)). Works for all supported families. `nboot` sets the
+  draw count (default `max(n, 100)`).
 
-# Supported families (M3 scope)
-- **Poisson** (log link): ρ = rank(X).
-- **Bernoulli / binomial (binary)** (logit link): ρ = rank(X).
+**Full-singularity shortcut.** When every variance component is on the boundary (θ = 0),
+the GLMM collapses to a plain GLM: `ρ = rank(X)` is returned directly with no refit,
+mirroring `cAIC4`'s `deleteZeroComponents → zeroLessModel\$rank` in both
+`biasCorrectionPoisson` and `biasCorrectionBernoulli`. The `method` kwarg has no effect
+on this path.
+
+The estimand and algorithm are pinned in `docs/math/0006-glmm-bias-correction.md`.
+
+# Arguments
+- `m`: a fitted `GeneralizedLinearMixedModel`.
+- `method`: df estimation method — `:auto` (default, family-dispatch) or `:bootstrap`.
+- `nboot`: bootstrap draw count; valid only with `method = :bootstrap`; default
+  `max(n, 100)` (matching `cAIC4::bcMer.R:54–56`).
+- `rng`: random-number generator for the bootstrap draws; default `Random.default_rng()`.
+
+# Returns
+- A [`CAICResult`](@ref) carrying the cAIC, ρ (`dof`), the conditional log-likelihood,
+  and provenance (`method` as given; `bsource = :na` — GLMM paths carry no Hessian
+  B-source).
 
 # Throws
-- `ArgumentError` for non-fully-singular GLMM fits (general M3 path not yet implemented).
-- `ArgumentError` for unsupported distribution families (free-dispersion families are
-  outside M3 scope, matching `cAIC4`'s own "not yet supported" warning).
+- `ArgumentError` for unsupported `method`, `nboot` misuse, or an unsupported family
+  under `method = :auto`.
+
+# Example
+```jldoctest
+julia> using MixedModels, cAIC
+
+julia> y = Float64[1,1,2,1, 8,9,8,9, 3,4,3,4]; g = repeat(1:3, inner=4);
+
+julia> m = fit(MixedModel, @formula(y ~ 1 + (1|g)), (; y, g), Poisson(); progress=false);
+
+julia> r = caic(m); r.caic ≈ -2 * r.condloglik + 2 * r.dof
+true
+```
 """
-function caic(m::GeneralizedLinearMixedModel{T,D}; kwargs...) where {T,D}
-    MMInternals.glmmisfullysingular(m) || throw(
-        ArgumentError(
-            "caic: GLMM scoring for non-fully-singular fits is not yet implemented (M3). \
-             Only the full-singularity fallback (all θ = 0 → ρ = rank(X)) is supported.",
-        ),
+function caic(
+    m::GeneralizedLinearMixedModel{T,D};
+    method::Symbol=:auto,
+    nboot::Union{Int,Nothing}=nothing,
+    rng::AbstractRNG=default_rng(),
+) where {T,D}
+    method in (:auto, :bootstrap) || throw(
+        ArgumentError("method for GLMM caic must be :auto or :bootstrap; got :$(method)"),
     )
-    p = MMInternals.glmmfixedefrank(m)
-    ρ = T(p)
-    μ = MMInternals.glmmfittedmu(m)
-    y = MMInternals.glmmresponse(m)
+    if nboot !== nothing
+        method === :bootstrap || throw(
+            ArgumentError(
+                "nboot is only valid with method = :bootstrap; got method = :$(method)"
+            ),
+        )
+        nboot > 0 || throw(ArgumentError("nboot must be positive; got $(nboot)"))
+    end
+
     d = MMInternals.glmmdist(m)
+    y = MMInternals.glmmresponse(m)
+    μ = MMInternals.glmmfittedmu(m)
     ℓ = _glmm_condloglik_dispatch(d, y, μ)
+
+    # Full-singularity: every θ = 0 → GLMM collapses to plain GLM; ρ = rank(X), no σ-penalty.
+    if MMInternals.glmmisfullysingular(m)
+        ρ = T(MMInternals.glmmfixedefrank(m))
+        return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
+            -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
+        )
+    end
+
+    # Non-singular: score with the appropriate df estimator.
+    ρ = if method === :bootstrap
+        ndraws = nboot !== nothing ? nboot : max(length(y), 100)
+        DofGLMM.dof_glmm_bootstrap(m; nboot=ndraws, rng=rng)
+    else
+        _glmm_df_auto(m, d)
+    end
+
     return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
-        -2ℓ + 2ρ, ρ, ℓ, nothing, false, :auto, :na
+        -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
     )
 end
 
-# Family dispatch for the GLMM conditional log-likelihood (full-singularity path).
-# Only Poisson and Bernoulli are in M3 scope; all other families raise ArgumentError.
+# Family dispatch for the GLMM conditional log-likelihood (Poisson and Bernoulli).
 function _glmm_condloglik_dispatch(::Poisson, y, μ)
     return Loglik.condloglik_poisson(y, μ)
 end
@@ -258,6 +313,18 @@ function _glmm_condloglik_dispatch(d, y, μ)
         ArgumentError(
             "caic: unsupported GLMM family $(typeof(d)). Only Poisson (log link) and \
              Bernoulli (logit link) are in M3 scope."
+        ),
+    )
+end
+
+# Family dispatch for the GLMM df estimator (method = :auto path).
+_glmm_df_auto(m::GeneralizedLinearMixedModel, ::Poisson) = DofGLMM.dof_glmm_poisson(m)
+_glmm_df_auto(m::GeneralizedLinearMixedModel, ::Bernoulli) = DofGLMM.dof_glmm_bernoulli(m)
+function _glmm_df_auto(::GeneralizedLinearMixedModel, d)
+    throw(
+        ArgumentError(
+            "caic: GLMM family $(typeof(d)) has no analytic df estimator for \
+             method=:auto. Use method=:bootstrap for non-Poisson/Bernoulli families."
         ),
     )
 end

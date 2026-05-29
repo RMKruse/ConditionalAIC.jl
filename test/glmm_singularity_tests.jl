@@ -150,11 +150,13 @@ end
     @test r.condloglik isa Float64
 end
 
-@testitem "caic on non-singular GLMM throws ArgumentError (M3 general path not yet implemented)" tags = [
+@testitem "caic on Binomial GLMM with method=:auto throws ArgumentError (no analytic df)" tags = [
     :glmm, :level2
 ] begin
-    # A non-singular GLMM must still raise ArgumentError — only the full-singularity
-    # fallback is implemented in #27; the Poisson/Bernoulli influence paths are later issues.
+    # A Binomial GLMM with multiple-trial data has no analytic df estimator for method=:auto
+    # (neither Poisson Chen-Stein nor Bernoulli Efron applies). caic must throw ArgumentError
+    # directing the user to method=:bootstrap. This is consistent with cAIC4's own scope:
+    # biasCorrectionPoisson and biasCorrectionBernoulli do not handle multi-trial binomial.
     using cAIC
     using MixedModels
     cbpp = MixedModels.dataset(:cbpp)
@@ -167,5 +169,6 @@ end
         progress=false,
     )
     @test !issingular(m)
-    @test_throws ArgumentError caic(m)
+    @test_throws ArgumentError caic(m)          # :auto + Binomial → unsupported family
+    @test_throws ArgumentError caic(m; method=:auto)
 end

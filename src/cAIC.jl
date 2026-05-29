@@ -5,11 +5,13 @@ Conditional Akaike Information Criterion and conditional model selection for
 mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl)
 — a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
 
-[`caic`](@ref) scores a fitted Gaussian `LinearMixedModel` by its conditional AIC (M2): the
-analytic Greven–Kneib bias correction assembled end-to-end into a [`CAICResult`](@ref).
-[`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5), returning an
-[`AnocaicTable`](@ref). The search verb (`stepcaic`, M4) remains a stub. All access to
-`MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
+[`caic`](@ref) scores a fitted model by its conditional AIC: a Gaussian `LinearMixedModel`
+via the analytic Greven–Kneib bias correction (M2), or a `GeneralizedLinearMixedModel`
+via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3). Both
+assemble into a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models
+by cAIC (M2.5), returning an [`AnocaicTable`](@ref). The search verb (`stepcaic`, M4)
+remains a stub. All access to `MixedModels.jl` internals is quarantined in the
+[`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
 
