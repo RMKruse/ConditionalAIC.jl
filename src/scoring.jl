@@ -278,32 +278,74 @@ function caic(
         nboot > 0 || throw(ArgumentError("nboot must be positive; got $(nboot)"))
     end
 
-    d = MMInternals.glmmdist(m)
-    y = MMInternals.glmmresponse(m)
-    μ = MMInternals.glmmfittedmu(m)
-    # `glmmpriorweights` carries the per-observation binomial trial counts (empty for
-    # Poisson/Bernoulli); only the Binomial branch consumes them.
-    ℓ = _glmm_condloglik_dispatch(d, y, μ, MMInternals.glmmpriorweights(m))
-
     # Full-singularity: every θ = 0 → GLMM collapses to plain GLM; ρ = rank(X), no σ-penalty.
+    # No refit (b̂ = 0 ⇒ μ̂ = Xβ̂ already), mirroring `cAIC4`'s `deleteZeroComponents → glm`.
     if MMInternals.glmmisfullysingular(m)
+        ℓ = _glmm_condll(m)
         ρ = T(MMInternals.glmmfixedefrank(m))
         return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
             -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
         )
     end
 
-    # Non-singular: score with the appropriate df estimator.
-    ρ = if method === :bootstrap
-        ndraws = nboot !== nothing ? nboot : max(length(y), 100)
-        DofGLMM.dof_glmm_bootstrap(m; nboot=ndraws, rng=rng)
-    else
-        _glmm_df_auto(m, d)
+    # Partial-singularity: SOME directions on the boundary. Drop them, refit the reduced GLMM,
+    # and cascade — a reduced refit may itself be singular — until a non-singular model is
+    # reached; score THAT (the singular fit's df is degenerate). Mirrors the LMM cascade and
+    # `cAIC4`'s `deleteZeroComponents` recursion. If the reduction fully collapses (no direction
+    # survives), fall back to the rank(X) plain-GLM df on the collapsed fit (its b̂ = 0 ⇒
+    # μ̂ = Xβ̂), with no reduced model carried.
+    if MMInternals.issingular(m)
+        mr = m
+        while MMInternals.issingular(mr)
+            next = MMInternals.reduceboundary(mr)
+            if next === nothing
+                ℓ = _glmm_condll(mr)
+                ρ = T(MMInternals.glmmfixedefrank(mr))
+                return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
+                    -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
+                )
+            end
+            mr = next
+        end
+        ℓ = _glmm_condll(mr)
+        ρ = _glmm_score_df(mr, method, nboot, rng)
+        return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
+            -2ℓ + 2ρ, ρ, ℓ, mr, true, method, :na
+        )
     end
 
+    # Non-singular: score it as given.
+    ℓ = _glmm_condll(m)
+    ρ = _glmm_score_df(m, method, nboot, rng)
     return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
         -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
     )
+end
+
+# Conditional log-likelihood of a (possibly reduced) GLMM fit, via family dispatch.
+# `glmmpriorweights` carries the per-observation binomial trial counts (empty for
+# Poisson/Bernoulli); only the Binomial branch consumes them.
+function _glmm_condll(m::GeneralizedLinearMixedModel)
+    return _glmm_condloglik_dispatch(
+        MMInternals.glmmdist(m),
+        MMInternals.glmmresponse(m),
+        MMInternals.glmmfittedmu(m),
+        MMInternals.glmmpriorweights(m),
+    )
+end
+
+# Effective df of a non-singular GLMM fit under the requested method.
+function _glmm_score_df(
+    m::GeneralizedLinearMixedModel,
+    method::Symbol,
+    nboot::Union{Int,Nothing},
+    rng::AbstractRNG,
+)
+    if method === :bootstrap
+        ndraws = nboot !== nothing ? nboot : max(length(MMInternals.glmmresponse(m)), 100)
+        return DofGLMM.dof_glmm_bootstrap(m; nboot=ndraws, rng=rng)
+    end
+    return _glmm_df_auto(m, MMInternals.glmmdist(m))
 end
 
 # Family dispatch for the GLMM conditional log-likelihood. `wts` are the binomial trial
