@@ -23,6 +23,7 @@ end
                 cAIC.Numerics,
                 cAIC.Loglik,
                 cAIC.DofLMM,
+                cAIC.DofGLMM,
                 cAIC.Components,
             ),
         )

@@ -47,7 +47,7 @@ first.
 | `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
 | `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
 | `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
-| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`] | refit a GLMM copy to a new response vector y |
+| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
@@ -559,6 +559,37 @@ function refitglmm_eta(m::GeneralizedLinearMixedModel{T}, y_new::Vector{T}) wher
     m_copy = deepcopy(m)
     refit!(m_copy, y_new; progress=false)
     return glmmlinpred(m_copy)
+end
+
+"""
+    bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+For each observation `i`, refit the model on the response with `yᵢ → 1 − yᵢ` (all
+other entries unchanged) and return the `i`-th fitted mean of that refit.
+
+One deepcopy of `m` is made as a working buffer; `n` sequential `refit!` calls are
+performed on it. The original `m` is not mutated.
+
+This is the refit loop underlying `DofGLMM.dof_glmm_bernoulli` / `cAIC4`'s
+`biasCorrectionBernoulli` (`R/biasCorrectionBernoulli.R:19–21`).
+
+# Returns
+- `Vector{T}` — length `n`; entry `i` is `μ̂ᵢ^{flip}` (the fitted mean at position `i`
+  after the `i`-th label flip), in `(0, 1)`.
+"""
+function bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) where {T}
+    y = glmmresponse(m)
+    n = length(y)
+    m_work = deepcopy(m)
+    y_work = copy(y)
+    μ_flip = Vector{T}(undef, n)
+    for i in 1:n
+        y_work[i] = one(T) - y_work[i]
+        refit!(m_work, y_work; progress=false)
+        μ_flip[i] = glmmfittedmu(m_work)[i]
+        y_work[i] = one(T) - y_work[i]
+    end
+    return μ_flip
 end
 
 end # module MMInternals
