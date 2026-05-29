@@ -373,22 +373,59 @@ end
     @test g3.ford_fd > g1.ford_fd
 end
 
-@testitem "caic rejects a non-Gaussian (GLMM) fit — M3 scope" tags = [:level2] begin
-    # The Gaussian bias correction (M2) does not apply to a generalised mixed model; until
-    # the GLMM path (M3) lands, `caic` on a `GeneralizedLinearMixedModel` must raise a
-    # typed error rather than mis-score it through the Gaussian spine.
+@testitem "caic on Bernoulli GLMM returns CAICResult — M3 general path (issue #31)" tags = [
+    :level2, :glmm
+] begin
+    # M3 general path (issue #31): caic on a non-singular Bernoulli GLMM must return a
+    # CAICResult rather than throw. Uses a small synthetic dataset (32 obs) for speed;
+    # comprehensive wiring tests are in caic_glmm_tests.jl.
     using MixedModels
-    using cAIC: caic
+    using cAIC: caic, CAICResult
 
-    gm = fit(
-        MixedModel,
-        @formula(r2 ~ 1 + anger + gender + (1 | subj) + (1 | item)),
-        MixedModels.dataset(:verbagg),
-        Bernoulli();
-        progress=false,
-    )
+    y = Float64[
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        0,
+        1,
+    ]
+    g = repeat(1:4, inner=8)
+    gm = fit(MixedModel, @formula(y ~ 1 + (1 | g)), (; y, g), Bernoulli(); progress=false)
     @test gm isa GeneralizedLinearMixedModel
-    @test_throws ArgumentError caic(gm)
+    @test !issingular(gm)
+
+    r = caic(gm)
+    @test r isa CAICResult{Float64,<:GeneralizedLinearMixedModel}
+    @test r.method == :auto
+    @test r.bsource == :na
+    @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-12
 end
 
 @testitem "caic is type-stable on the Gaussian path" tags = [:level2] begin

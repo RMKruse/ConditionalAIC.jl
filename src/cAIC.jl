@@ -5,21 +5,25 @@ Conditional Akaike Information Criterion and conditional model selection for
 mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl)
 — a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
 
-[`caic`](@ref) scores a fitted Gaussian `LinearMixedModel` by its conditional AIC (M2): the
-analytic Greven–Kneib bias correction assembled end-to-end into a [`CAICResult`](@ref).
-[`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5), returning an
-[`AnocaicTable`](@ref). The search verb (`stepcaic`, M4) remains a stub. All access to
-`MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
+[`caic`](@ref) scores a fitted model by its conditional AIC: a Gaussian `LinearMixedModel`
+via the analytic Greven–Kneib bias correction (M2), or a `GeneralizedLinearMixedModel`
+via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3). Both
+assemble into a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models
+by cAIC (M2.5), returning an [`AnocaicTable`](@ref). The search verb (`stepcaic`, M4)
+remains a stub. All access to `MixedModels.jl` internals is quarantined in the
+[`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
 
-using MixedModels: MixedModel, LinearMixedModel, GeneralizedLinearMixedModel
+using MixedModels:
+    MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli, Binomial
 using Random: AbstractRNG, default_rng, randn
 
 include("numerics.jl")
 include("loglik.jl")
 include("dof_lmm.jl")        # defines DofLMM.GaussianComponents (used by Components)
 include("mm_internals.jl")   # QUARANTINE: the only MixedModels-internals touchpoint
+include("dof_glmm.jl")       # GLMM df routes: Poisson Chen-Stein + Bernoulli Efron (M3)
 include("components.jl")     # fit-extracted arrays → GaussianComponents (uses ..DofLMM)
 include("types.jl")          # CAICResult, AnocaicTable (public result types)
 include("scoring.jl")        # the caic methods (the scoring assembly)

@@ -41,6 +41,15 @@ first.
 | `objective!(m)`   | unexported  | [`bhessian`]        | curried θ→deviance closure (`Base.Fix1`); FD driver target |
 | `setθ!(m, θ)`     | unexported  | [`bhessian`]        | set variance parameters θ — restore θ̂ after FD perturbation |
 | `updateL!(m)`     | unexported  | [`bhessian`]        | refactorise `L` after `setθ!` — completes the restore    |
+| `m.η`             | property    | [`glmmlinpred`]     | linear predictor η (GLMM, n-vector); aliases `m.resp.eta`|
+| `m.resp.mu`       | field       | [`glmmfittedmu`]    | fitted mean μ on the response scale (GLMM, n-vector)     |
+| `m.resp.y`        | field       | [`glmmresponse`]    | response vector y (GLMM, n-vector, on the μ scale)       |
+| `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
+| `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
+| `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
+| `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
+| `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
+| `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -56,20 +65,26 @@ module MMInternals
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
     LinearMixedModel,
+    GeneralizedLinearMixedModel,
     AbstractReMat,
     ReMat,
+    Poisson,
+    Binomial,
+    Bernoulli,
     ranef,
     response,
     fitted,
     leverage,
     adjA,
     fit!,
+    refit!,
     objective!,
     setθ!,
     updateL!
 using MixedModels: MixedModels
 using FiniteDiff: finite_difference_hessian
 using ForwardDiff: ForwardDiff
+using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
 
@@ -396,6 +411,282 @@ function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
     mb.optsum.REML = m.optsum.REML
     fit!(mb; progress=false)
     return conditionalmean(mb)
+end
+
+# ── GLMM singularity (M3) ─────────────────────────────────────────────────────
+
+"""
+    glmmisfullysingular(m::GeneralizedLinearMixedModel) -> Bool
+
+Whether **every** random-effect variance direction in the GLMM is on the boundary
+(`λ[d, d] = 0` for all `d` in every reterm of the working LMM `m.LMM`). This is the
+GLMM analogue of `reduceboundary(m.LMM) === nothing` for the Gaussian path: when
+fully singular, the GLMM collapses to a plain GLM and the cAIC df is `rank(X)` with
+no σ-penalty (`docs/math/0006-glmm-bias-correction.md §5`).
+
+Returns `false` for partial singularity (some but not all directions on the boundary)
+or for a non-singular fit — those cases are handled by the general M3 influence paths
+(not yet implemented).
+"""
+function glmmisfullysingular(m::GeneralizedLinearMixedModel)
+    for re in m.LMM.reterms
+        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
+        S = size(re.λ, 1)
+        any(d -> re.λ[d, d] != 0, 1:S) && return false
+    end
+    return true
+end
+
+# ── GLMM accessors (M3) ────────────────────────────────────────────────────────
+
+"""
+    glmmlinpred(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The linear predictor `η` (`m.η`, an alias for `m.resp.eta`) — the `n`-vector on the
+link scale satisfying `g(μ) = η` where `g` is the link function and `μ` is the fitted
+mean. Enters the GLMM conditional log-likelihood and the bias-correction routines.
+"""
+function glmmlinpred(m::GeneralizedLinearMixedModel{T}) where {T}
+    η = m.η
+    η isa Vector{T} || _drift("m.η", Vector{T}, η)
+    return η
+end
+
+"""
+    glmmfittedmu(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The fitted mean `μ` on the response scale (`m.resp.mu`) — the `n`-vector satisfying
+`μ = g⁻¹(η)` where `g` is the link function. For a binomial GLMM, `μ` is a vector of
+probabilities; for a Poisson GLMM, the conditional Poisson rates. Used for conditional
+log-likelihood evaluation and as the return value of [`bootstrapglmmfit`](@ref).
+"""
+function glmmfittedmu(m::GeneralizedLinearMixedModel{T}) where {T}
+    μ = m.resp.mu
+    μ isa Vector{T} || _drift("m.resp.mu", Vector{T}, μ)
+    return μ
+end
+
+"""
+    glmmresponse(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The response vector `y` (`m.resp.y`) — the `n`-vector of observed values on the μ
+scale (proportions for binomial-with-weights, raw counts for Poisson, etc.). Used to
+feed the refit loop in [`bootstrapglmmfit`](@ref).
+"""
+function glmmresponse(m::GeneralizedLinearMixedModel{T}) where {T}
+    y = m.resp.y
+    y isa Vector{T} || _drift("m.resp.y", Vector{T}, y)
+    return y
+end
+
+"""
+    glmmdist(m::GeneralizedLinearMixedModel{T, D}) -> D
+
+The GLM distribution family `D` (`m.resp.d`) — the distribution type parameter of the
+`GeneralizedLinearMixedModel{T, D}`. Dispatches the conditional log-likelihood
+(`loglik.jl`) and the bootstrap draw in [`bootstrapglmmfit`](@ref) to the correct
+density/sampler.
+"""
+function glmmdist(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
+    d = m.resp.d
+    d isa D || _drift("m.resp.d", D, d)
+    return d::D
+end
+
+"""
+    glmmfixedefrank(m::GeneralizedLinearMixedModel) -> Int
+
+The rank `p` of the fixed-effects design matrix in the working linear mixed model
+(`m.LMM.feterm.rank`). Used as the full-singularity fallback: when every random-effect
+direction collapses, the working LMM's `p` enters the fixed-effects-only cAIC score.
+"""
+function glmmfixedefrank(m::GeneralizedLinearMixedModel)
+    p = m.LMM.feterm.rank
+    p isa Int || _drift("m.LMM.feterm.rank", Int, p)
+    return p
+end
+
+"""
+    bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) -> Vector{T}
+
+Refit a deep copy of the GLMM `m` to the bootstrap response `y_star` (same design and
+distribution family as `m`, variance parameters re-estimated from scratch via
+`refit!`) and return the conditional fitted mean `μ* = g⁻¹(η*)` of the new fit. The
+original model `m` is not mutated.
+
+# Arguments
+- `m`: the original fitted `GeneralizedLinearMixedModel`; supplies the design, link, and
+  distribution.
+- `y_star`: a bootstrap response vector of length `n = length(glmmresponse(m))`, on the
+  same scale as `m.resp.y` (proportions for binomial-with-weights, counts for Poisson,
+  etc.).
+
+# Returns
+- `Vector{T}` — the conditional fitted mean of the bootstrap fit.
+
+# Throws
+- `ArgumentError` if `length(y_star) ≠ n`.
+"""
+function bootstrapglmmfit(m::GeneralizedLinearMixedModel{T}, y_star::Vector{T}) where {T}
+    n = length(m.resp.y)
+    length(y_star) == n || throw(ArgumentError("y_star length $(length(y_star)) ≠ n = $n"))
+    m_copy = deepcopy(m)
+    refit!(m_copy, y_star; progress=false)
+    return glmmfittedmu(m_copy)
+end
+
+"""
+    refitglmm_eta(m::GeneralizedLinearMixedModel{T}, y_new::Vector{T}) -> Vector{T}
+
+Refit a deep copy of the GLMM `m` to the response `y_new` and return the linear
+predictor `η̂` of the refitted model. The original model `m` is not mutated.
+
+Used by the Poisson Chen–Stein refit loop (`DofGLMM.dof_glmm_poisson`): for each
+nonzero observation `i`, the response is decremented (`yᵢ − 1`) and this function
+returns the new `η̂` so the caller can extract the `i`-th component.
+
+Distinct from [`bootstrapglmmfit`](@ref) which returns the fitted mean `μ̂`; the
+Chen–Stein formula requires the link-scale `η̂`.
+
+# Arguments
+- `m`: the original fitted `GeneralizedLinearMixedModel`.
+- `y_new`: new response vector, length `n = length(glmmresponse(m))`.
+
+# Returns
+- `Vector{T}` — the linear predictor `η̂ = Xβ̂ + Zb̂` of the refitted model.
+
+# Throws
+- `ArgumentError` if `length(y_new) ≠ n`.
+"""
+function refitglmm_eta(m::GeneralizedLinearMixedModel{T}, y_new::Vector{T}) where {T}
+    n = length(m.resp.y)
+    length(y_new) == n || throw(ArgumentError("y_new length $(length(y_new)) ≠ n = $n"))
+    m_copy = deepcopy(m)
+    refit!(m_copy, y_new; progress=false)
+    return glmmlinpred(m_copy)
+end
+
+"""
+    bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+For each observation `i`, refit the model on the response with `yᵢ → 1 − yᵢ` (all
+other entries unchanged) and return the `i`-th fitted mean of that refit.
+
+One deepcopy of `m` is made as a working buffer; `n` sequential `refit!` calls are
+performed on it. The original `m` is not mutated.
+
+This is the refit loop underlying `DofGLMM.dof_glmm_bernoulli` / `cAIC4`'s
+`biasCorrectionBernoulli` (`R/biasCorrectionBernoulli.R:19–21`).
+
+# Returns
+- `Vector{T}` — length `n`; entry `i` is `μ̂ᵢ^{flip}` (the fitted mean at position `i`
+  after the `i`-th label flip), in `(0, 1)`.
+"""
+function bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) where {T}
+    y = glmmresponse(m)
+    n = length(y)
+    m_work = deepcopy(m)
+    y_work = copy(y)
+    μ_flip = Vector{T}(undef, n)
+    for i in 1:n
+        y_work[i] = one(T) - y_work[i]
+        refit!(m_work, y_work; progress=false)
+        μ_flip[i] = glmmfittedmu(m_work)[i]
+        y_work[i] = one(T) - y_work[i]
+    end
+    return μ_flip
+end
+
+"""
+    glmmpriorweights(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The prior-weights vector `m.resp.wts` — the per-observation binomial denominators for
+a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Bernoulli);
+non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
+
+Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
+distribution for conditional bootstrap draws (`docs/math/0006` §5; ADR-0005).
+"""
+function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
+    wts = m.resp.wts
+    wts isa Vector{T} || _drift("m.resp.wts", Vector{T}, wts)
+    return wts
+end
+
+"""
+    glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) -> Matrix{T}
+
+Draw `B` conditional bootstrap samples from the GLMM response distribution, holding the
+random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
+an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
+
+Per ADR-0005, draws directly from `f(μ̂ᵢ)`:
+- **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
+- **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
+  [`glmmpriorweights`](@ref).
+- **Bernoulli:** `yᵢ^{(b)} = rand(Bernoulli(μ̂ᵢ))` (0.0 or 1.0)
+
+Unsupported families (free-dispersion etc.) raise `ArgumentError`.
+
+# Throws
+- `ArgumentError` for unsupported distribution families.
+- `ArgumentError` if the Binomial model has no prior weights.
+"""
+function glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) where {T}
+    μ = glmmfittedmu(m)
+    n = length(μ)
+    Ystar = Matrix{T}(undef, n, B)
+    _fill_conddraw!(rng, Ystar, μ, glmmdist(m), m)
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Poisson, _m
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Poisson(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Bernoulli, _m
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Bernoulli(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Binomial, m
+) where {T}
+    wts = glmmpriorweights(m)
+    isempty(wts) && throw(
+        ArgumentError(
+            "glmmconddraw: conditional bootstrap for Binomial GLMM requires prior weights " *
+            "(number of trials per observation). Refit the model with `weights=ntrials`.",
+        ),
+    )
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        ni = Int(wts[i])
+        Ystar[i, b] = T(rand(rng, Binomial(ni, μ[i]))) / T(ni)
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(rng, Ystar, μ, d, _m)
+    throw(
+        ArgumentError(
+            "glmmconddraw: family $(typeof(d)) is not supported by the conditional " *
+            "bootstrap. Supported: Poisson (log link), Bernoulli (logit link), Binomial " *
+            "(logit link, with prior weights). Free-dispersion families are outside M3 " *
+            "scope — matches cAIC4's \"not yet supported\" warning.",
+        ),
+    )
 end
 
 end # module MMInternals

@@ -251,7 +251,7 @@ end
         for name in cases
             g = f[name]
             haskey(g, "rho_ref") || error(
-                "fixture case `$name` has no rho_ref — run generate_fixtures_bootstrap.R"
+                "fixture case `$name` has no rho_ref — run generate_fixtures_bootstrap.R",
             )
 
             yhat = read(g["yhat"])
