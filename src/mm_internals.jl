@@ -49,6 +49,7 @@ first.
 | `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
+| `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -67,6 +68,9 @@ using MixedModels:
     GeneralizedLinearMixedModel,
     AbstractReMat,
     ReMat,
+    Poisson,
+    Binomial,
+    Bernoulli,
     ranef,
     response,
     fitted,
@@ -80,6 +84,7 @@ using MixedModels:
 using MixedModels: MixedModels
 using FiniteDiff: finite_difference_hessian
 using ForwardDiff: ForwardDiff
+using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
 
@@ -590,6 +595,98 @@ function bernoulliflipmu(m::GeneralizedLinearMixedModel{T}) where {T}
         y_work[i] = one(T) - y_work[i]
     end
     return μ_flip
+end
+
+"""
+    glmmpriorweights(m::GeneralizedLinearMixedModel{T}) -> Vector{T}
+
+The prior-weights vector `m.resp.wts` — the per-observation binomial denominators for
+a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Bernoulli);
+non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
+
+Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
+distribution for conditional bootstrap draws (`docs/math/0006` §5; ADR-0005).
+"""
+function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
+    wts = m.resp.wts
+    wts isa Vector{T} || _drift("m.resp.wts", Vector{T}, wts)
+    return wts
+end
+
+"""
+    glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) -> Matrix{T}
+
+Draw `B` conditional bootstrap samples from the GLMM response distribution, holding the
+random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
+an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
+
+Per ADR-0005, draws directly from `f(μ̂ᵢ)`:
+- **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
+- **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
+  [`glmmpriorweights`](@ref).
+- **Bernoulli:** `yᵢ^{(b)} = rand(Bernoulli(μ̂ᵢ))` (0.0 or 1.0)
+
+Unsupported families (free-dispersion etc.) raise `ArgumentError`.
+
+# Throws
+- `ArgumentError` for unsupported distribution families.
+- `ArgumentError` if the Binomial model has no prior weights.
+"""
+function glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) where {T}
+    μ = glmmfittedmu(m)
+    n = length(μ)
+    Ystar = Matrix{T}(undef, n, B)
+    _fill_conddraw!(rng, Ystar, μ, glmmdist(m), m)
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Poisson, _m
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Poisson(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Bernoulli, _m
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Bernoulli(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Binomial, m
+) where {T}
+    wts = glmmpriorweights(m)
+    isempty(wts) && throw(
+        ArgumentError(
+            "glmmconddraw: conditional bootstrap for Binomial GLMM requires prior weights " *
+            "(number of trials per observation). Refit the model with `weights=ntrials`.",
+        ),
+    )
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        ni = Int(wts[i])
+        Ystar[i, b] = T(rand(rng, Binomial(ni, μ[i]))) / T(ni)
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(rng, Ystar, μ, d, _m)
+    throw(
+        ArgumentError(
+            "glmmconddraw: family $(typeof(d)) is not supported by the conditional " *
+            "bootstrap. Supported: Poisson (log link), Bernoulli (logit link), Binomial " *
+            "(logit link, with prior weights). Free-dispersion families are outside M3 " *
+            "scope — matches cAIC4's \"not yet supported\" warning.",
+        ),
+    )
 end
 
 end # module MMInternals

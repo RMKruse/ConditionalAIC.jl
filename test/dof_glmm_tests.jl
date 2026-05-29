@@ -289,7 +289,7 @@ end
     # The refit loop must not mutate `m`: it deepcopies once as a working buffer
     # (docs/math/0006 §4 — the algorithm description in issue #29).
     using MixedModels
-    using cAIC: DofGLMM
+    using cAIC: DofGLMM, MMInternals
     using CategoricalArrays
 
     y = Float64[0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0]
@@ -300,10 +300,234 @@ end
     m = fit(MixedModel, @formula(y ~ x + (1 | group)), dat, Bernoulli(); progress=false)
 
     η_before = copy(m.η)
-    μ_before = copy(cAIC.MMInternals.glmmfittedmu(m))
+    μ_before = copy(MMInternals.glmmfittedmu(m))
 
     DofGLMM.dof_glmm_bernoulli(m)
 
     @test m.η == η_before
-    @test cAIC.MMInternals.glmmfittedmu(m) == μ_before
+    @test MMInternals.glmmfittedmu(m) == μ_before
+end
+
+# ── dof_glmm_bootstrap — conditional bootstrap df (other GLMM families, §5) ──────
+
+@testitem "dof_glmm_bootstrap: returns finite positive ρ for a binomial GLMM" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    # Tracer bullet (issue #30): dof_glmm_bootstrap on the CBPP binomial GLMM
+    # (MixedModels.dataset(:cbpp)) must return a finite, positive effective df.
+    # CBPP: incid/hsz ~ period + (1|herd), Binomial, weights = herd sizes.
+    # Uses nboot=20 for speed; correctness is checked by the Level-2 fixture test.
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    ρ = DofGLMM.dof_glmm_bootstrap(m; nboot=20, rng=Xoshiro(1))
+    @test isfinite(ρ)
+    @test ρ > 0
+end
+
+@testitem "dof_glmm_bootstrap: type stability on a fitted binomial GLMM" tags = [
+    :type_stability, :glmm, :bootstrap
+] begin
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    @test (@inferred DofGLMM.dof_glmm_bootstrap(m; nboot=5, rng=Xoshiro(2))) isa Float64
+end
+
+@testitem "dof_glmm_bootstrap: leaves the original model untouched" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    using cAIC
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM, MMInternals
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    η_before = copy(m.η)
+    μ_before = copy(MMInternals.glmmfittedmu(m))
+
+    DofGLMM.dof_glmm_bootstrap(m; nboot=10, rng=Xoshiro(3))
+
+    @test m.η == η_before
+    @test MMInternals.glmmfittedmu(m) == μ_before
+end
+
+@testitem "dof_glmm_bootstrap: seeded RNG is reproducible" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    ρ1 = DofGLMM.dof_glmm_bootstrap(m; nboot=10, rng=Xoshiro(99))
+    ρ2 = DofGLMM.dof_glmm_bootstrap(m; nboot=10, rng=Xoshiro(99))
+    @test ρ1 == ρ2
+end
+
+@testitem "dof_glmm_bootstrap: full-singularity fallback returns rank(X)" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    # When all variance components are on the boundary (fully singular GLMM),
+    # dof_glmm_bootstrap must return T(rank(X)) with no refit loop — matching
+    # cAIC4's biasCorrectionPoisson.R:14–16 and biasCorrectionBernoulli.R:11–13.
+    #
+    # Dataset: 10 groups of 2 observations each, all groups have the same mean
+    # proportion 0.5 → zero between-group variation → optimizer finds θ=0 → fully
+    # singular. Same construction as the Poisson singularity test in
+    # test/glmm_singularity_tests.jl.
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM, MMInternals
+
+    # Poisson GLMM: alternating [2,4] within each group → all group means = 3 → no
+    # between-group variation → θ=0 → fully singular. Same construction used in
+    # test/glmm_singularity_tests.jl. The full-singularity fallback is family-agnostic:
+    # glmmisfullysingular + glmmfixedefrank both check m.LMM, not the response family.
+    y = repeat([2, 4], 10)
+    g = repeat(1:10, inner=2)
+    data = (; y, g)
+    m = fit(MixedModel, @formula(y ~ 1 + (1 | g)), data, Poisson(); progress=false)
+
+    @test MMInternals.glmmisfullysingular(m)
+    p = MMInternals.glmmfixedefrank(m)
+    ρ = DofGLMM.dof_glmm_bootstrap(m; rng=Xoshiro(5))
+    @test ρ == Float64(p)
+end
+
+@testitem "glmmconddraw: returns n×B matrix of proportions for a Binomial GLMM" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: MMInternals
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    n = length(cbpp.herd)
+    B = 50
+    Ystar = MMInternals.glmmconddraw(Xoshiro(7), m, B)
+
+    @test Ystar isa Matrix{Float64}
+    @test size(Ystar) == (n, B)
+    @test all(isfinite, Ystar)
+    @test all(x -> 0 ≤ x ≤ 1, Ystar)   # proportions for binomial response
+end
+
+@testitem "glmmconddraw: marginal means ≈ μ̂ for a Binomial GLMM (large B)" tags = [
+    :level2, :glmm, :bootstrap
+] begin
+    # Statistical Level-1 check (ADR-0003): the row-means of B=2000 conditional draws
+    # must be within ≈3 SE of μ̂ for each observation (SE = sqrt(μ*(1-μ)/B)).
+    # This validates the draw distribution without fitting any additional models.
+    using MixedModels
+    using Random: Xoshiro
+    using Statistics: mean
+    using cAIC: MMInternals
+
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    μhat = MMInternals.glmmfittedmu(m)
+    B = 2000
+    Ystar = MMInternals.glmmconddraw(Xoshiro(13), m, B)
+    rowmeans = vec(mean(Ystar; dims=2))
+
+    # 3-sigma tolerance: SE ≈ sqrt(μ*(1-μ)/B) per observation.
+    # Multiplied by a conservative factor of 6 (3-sigma on each side).
+    tols = 6 .* sqrt.(μhat .* (1 .- μhat) ./ B)
+    for i in eachindex(μhat)
+        @test abs(rowmeans[i] - μhat[i]) < tols[i]
+    end
+end
+
+@testitem "dof_glmm_bootstrap Level-2 fixture — vs cAIC4 conditionalBootstrap" tags = [
+    :level2, :glmm, :bootstrap, :fixture
+] begin
+    # Level-2 correctness gate against the committed HDF5 fixture generated by
+    # test/generate_fixtures_glmm_bootstrap.R (which calls cAIC4::conditionalBootstrap
+    # on the CBPP binomial GLMM and saves rho_ref).
+    # Tolerance: atol = 2.0, matching the Gaussian bootstrap gate (DECISIONS.md;
+    # Monte Carlo variance + lme4/MixedModels.jl fit discrepancy).
+    using HDF5
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: DofGLMM
+
+    fixture = joinpath(@__DIR__, "fixtures", "dof_glmm_bootstrap_level2.h5")
+    @test isfile(fixture)
+    if isfile(fixture)
+        rho_ref = h5open(fixture, "r") do f
+            only(Float64.(read(f["rho_ref"])))
+        end
+
+        cbpp = MixedModels.dataset(:cbpp)
+        m = fit(
+            MixedModel,
+            @formula(incid / hsz ~ period + (1 | herd)),
+            cbpp,
+            Binomial();
+            weights=float.(cbpp.hsz),
+            progress=false,
+        )
+
+        ρ = DofGLMM.dof_glmm_bootstrap(m; nboot=500, rng=Xoshiro(42))
+        @test isfinite(ρ)
+        @test ρ ≈ rho_ref atol = 2.0
+    end
 end

@@ -123,7 +123,8 @@ end
     :loglik
 ] begin
     # Single-obs anchor: y=1, μ=0.5 → log(0.5) = −log 2 ≈ −0.6931471805599453.
-    @test cAIC.Loglik.condloglik_bernoulli([1.0], [0.5]) ≈ -log(2.0) rtol = 1e-6 atol = 1e-10
+    @test cAIC.Loglik.condloglik_bernoulli([1.0], [0.5]) ≈ -log(2.0) rtol = 1e-6 atol =
+        1e-10
 
     # General case cross-checked per-observation. y ∈ {0,1} so log(1−μ) is base Julia.
     y = [0.0, 1.0, 1.0]

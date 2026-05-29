@@ -5,7 +5,7 @@ Family-specific **effective degrees of freedom** ρ for generalised linear mixed
 the GLMM-side analogue of [`cAIC.DofLMM`](@ref) for the Gaussian path.
 
 The estimand and all family-specific formulae are pinned in
-`docs/math/0006-glmm-bias-correction.md`. This module implements two df routes in M3
+`docs/math/0006-glmm-bias-correction.md`. This module implements three df routes in M3
 scope:
 
 - **Poisson (Chen–Stein):** [`dof_glmm_poisson`](@ref) / §3 of the math spec.
@@ -13,6 +13,10 @@ scope:
 - **Bernoulli (Efron's Steinian):** [`dof_glmm_bernoulli`](@ref) / §4 of the math spec.
   Per-observation label flip (`yᵢ → 1 − yᵢ`): `n` full-model refits, accumulated as a
   weighted logit difference.
+- **Other families — conditional bootstrap:** [`dof_glmm_bootstrap`](@ref) / §5.
+  Binomial with `|unique(y)|>2` and any other canonical-link family. `B` conditional
+  draws `y*(b) ~ f(μ̂)` (ADR-0005 direct draw), each refitted; the link-scale covariance
+  penalty is [`DofLMM.efron_penalty`](@ref) with σ̂²=1.
 
 Each route follows the same Level-1 / Level-2 isolation pattern as `DofLMM`
 (ADR-0003): a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
@@ -28,6 +32,8 @@ module DofGLMM
 
 using LogExpFunctions: logit
 using MixedModels: GeneralizedLinearMixedModel
+using Random: AbstractRNG, Xoshiro
+using ..DofLMM: efron_penalty
 using ..MMInternals
 using ..MMInternals: glmmresponse, glmmlinpred, refitglmm_eta
 
@@ -233,6 +239,71 @@ function _bernoulli_df(
         ρ += weight_i * sign_i * logit_diff
     end
     return ρ
+end
+
+# ── dof_glmm_bootstrap — conditional bootstrap (other families) ───────────────
+
+"""
+    dof_glmm_bootstrap(m::GeneralizedLinearMixedModel{T}; nboot, rng) -> T
+
+Conditional bootstrap effective degrees of freedom for a fitted GLMM with a family
+outside the Poisson Chen–Stein and Bernoulli Efron paths. The primary use case is
+**binomial with `|unique(y)| > 2`** (multiple-trials binomial) and any other
+canonical-link family. The estimand and algorithm are pinned in `docs/math/0006` §5.
+
+```math
+\\rho_{\\mathrm{boot}}
+  = \\frac{1}{(B-1)\\,\\hat\\sigma^{2}}
+    \\sum_{b=1}^{B} \\sum_{i=1}^{n}
+      \\hat\\eta_i^{(b)}\\,\\bigl(y_i^{(b)} - \\bar y^{*}_i\\bigr),
+\\quad \\hat\\sigma^2 = 1 \\text{ (canonical-link families).}
+```
+
+Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response distribution
+(ADR-0005): `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
+the link-scale fitted values after refitting on `y^{(b)}` — one full GLMM refit per draw,
+via [`MMInternals.refitglmm_eta`](@ref). The bias-correction arithmetic is the shared
+[`DofLMM.efron_penalty`](@ref) kernel with σ=1.
+
+The ground-truth R function is `cAIC4::conditionalBootstrap`
+(`R/conditionalBootstrap.R`).
+
+# Arguments
+- `m`: a fitted `GeneralizedLinearMixedModel`. The original model is not mutated; all
+  refits operate on deep copies (via [`MMInternals.refitglmm_eta`](@ref)).
+- `nboot`: number of bootstrap draws `B ≥ 2`; default `max(n, 100)`, matching
+  `cAIC4`'s `bcMer.R:54–56`.
+- `rng`: random-number generator for the conditional draws; default `Xoshiro()`
+  (platform-seeded, unpredictable). Pass a seeded `Xoshiro(seed)` for reproducibility.
+
+# Returns
+- `ρ::T` — the effective df. Returns `T(rank(X))` immediately if the model is fully
+  singular (all variance components on the boundary), consistent with
+  `cAIC4::biasCorrectionPoisson` and `biasCorrectionBernoulli` (both call
+  `deleteZeroComponents` first and fall back to `zeroLessModel\$rank`).
+
+# Throws
+- `ArgumentError` for unsupported families (free-dispersion families outside M3 scope).
+- `ArgumentError` if a Binomial GLMM has no prior weights.
+"""
+function dof_glmm_bootstrap(
+    m::GeneralizedLinearMixedModel{T};
+    nboot::Int=max(length(MMInternals.glmmresponse(m)), 100),
+    rng::AbstractRNG=Xoshiro(),
+) where {T}
+    MMInternals.glmmisfullysingular(m) && return T(MMInternals.glmmfixedefrank(m))
+
+    μhat = MMInternals.glmmfittedmu(m)
+    n = length(μhat)
+    B = nboot
+
+    Ystar = MMInternals.glmmconddraw(rng, m, B)      # n×B conditional draws
+    Etastar = Matrix{T}(undef, n, B)
+    for b in 1:B
+        Etastar[:, b] = MMInternals.refitglmm_eta(m, Ystar[:, b])
+    end
+
+    return efron_penalty(μhat, one(T), Ystar, Etastar)
 end
 
 end # module DofGLMM
