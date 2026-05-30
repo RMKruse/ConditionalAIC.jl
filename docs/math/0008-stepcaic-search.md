@@ -176,14 +176,121 @@ layer — no cAIC value is computed; the candidate enumeration of §2–§3 buil
 
 ## 2. Backward enumeration — `backwardStep` / `makeBackward`
 
-Drop one RE direction at a time per grouping factor; drop a grouping factor **whole** when it has a
-single surviving direction (→ the term is removed; all-removed → the `lm`/`glm` terminal). Filters:
-`removeUncor` (no correlated→uncorrelated reduction unless `selectcorrelation`), `removeNoInt`
-(every RE keeps its intercept unless `allownointercept`), `keep`-floor enforcement, and
-de-duplication (`checkREs`, ordered-name dedup).
+`backwardcandidates(spec; keep, selectcorrelation, allownointercept) -> Vector{RESpec}` is the
+faithful port of `cAIC4`'s `backwardStep` (`R/helperfuns_stepcAIC.R:93–201`), the only branch of
+`makeBackward` (`:805–822`) in RE-only scope. It returns the random-effects neighbours of `spec` that
+are **one direction smaller**. The `lm`/`glm` terminal (§0.1) is *not* a `RESpec` (it has no `|`
+term, and [`render`](@ref cAIC.render) rejects an empty spec), so it is **not** an element of the
+returned vector: an **empty** `Vector{RESpec}` is the terminal/exhausted signal — the faithful image
+of `cAIC4`'s `NA` return (`:104`) and of an empty `listOfAllCombs` (the degenerate cases below).
 
-> *(to fill: the exact drop set as a function of `cnms`, the `keep` intersection, and the
-> filter predicates — the Level-1 candidate-set equality target.)*
+### 2.1 The `cnms` bridge (representation)
+
+`cAIC4` enumerates over `object@cnms`, a *named list* `grouping → c(labels)` whose names may
+**repeat**: `lme4` represents an *uncorrelated* term `(1 + x || g)` as the two entries
+`g = "(Intercept)"`, `g = "x"`, carrying no correlated flag (doc §1.1). A `RESpec` instead carries
+that flag on one `REGroup` per term. The two representations are bridged by a single map, applied
+identically on the R (fixture) and Julia sides so set-equality is well posed:
+
+```
+cnmsform(spec) :: Vector{(grouping::Symbol, directions::Vector{String})}   # the cAIC4 `cnms`
+  for g in spec.groups:
+    g.correlated   → one entry  (g.grouping, g.directions)
+    ¬g.correlated  → one single-direction entry (g.grouping, [d]) per d in g.directions
+```
+
+The inverse `respec(cnmsform)` regroups by `grouping` preserving first-appearance order: a grouping
+occurring **once** → `REGroup(grouping, dirs, correlated = true)`; a grouping occurring in **several**
+single-direction entries → one `REGroup(grouping, concat(dirs), correlated = false)`. The algorithm
+of §2.2–§2.4 runs entirely on `cnmsform`; `backwardcandidates` is `respec ∘ backwardStep ∘ cnmsform`.
+
+The **canonical encoding** used as the Level-1 oracle (§2.5) is `cnmsform` itself, rendered to a
+sorted multiset of term-strings `"grouping:sorted(directions)"` — no explicit correlated flag, since
+the term *structure* already distinguishes `(1+x|g)` (one two-label term) from `(1+x||g)` (two
+one-label terms). Two candidates are equal **iff** their canonical encodings are equal.
+
+### 2.2 The drop set (`backwardStep:107–189`)
+
+Let `cnms = cnmsform(spec)` and `L = Σₜ length(directionsₜ)` (the total number of RE directions).
+
+- **Terminal guard (`:96–105`).** If `L == 1` (a single random intercept overall): with no `keep`,
+  return `[]` (`NA` → terminal); with `keep`, return `[spec]` (the model is its own sole neighbour —
+  observed: `(1|g)` keep `~(1|g)` → `{(1|g)}`).
+- **Per-direction drop (`:107–151`).** Group the `cnms` entries by name (`split`). For a grouping
+  whose entries hold a direction-vector of length `k`:
+  - `k == 1` (single-direction term) → dropping it yields the marker `NA` (the whole term is removed);
+  - `k > 1` → produce `k` reduced vectors, the `i`-th being the direction-vector **with its `i`-th
+    label removed** (`d[[i]] <- d[[i]][-i]`). *Faithful quirk:* `cAIC4` indexes each of the `k`
+    same-name copies by its position, so for an *uncorrelated* split (each copy length 1) the `i`-th
+    copy is indexed `[-i]`, which for `i` past its length is a no-op — reproducing the observed
+    degenerate outputs (uncorrelated `(1|g)+(0+x|g)` → `{}` by default, `{(x|g)}` under
+    `selectcorrelation ∧ allownointercept`). The port mirrors `[-i]` exactly.
+- **Candidate assembly (`:171–184`).** For each reduced/`NA` term of grouping `gᵢ`, the candidate is
+  `cnms` with **all** entries named `gᵢ` replaced by that single reduced term (`append(cnms[names ≠
+  gᵢ], reduced)`). An empty (`length 0`) reduced term drops the candidate at the `notempty` filter
+  (`:180`) — the source of the empty-set degeneracy above.
+
+### 2.3 `keep` (`backwardStep:110–164`, `interpret.random`)
+
+`keep` is an RE formula fragment (`~(1|subj)`), parsed by `interpret.random` to a named list
+`grouping → c("(Intercept)"|"0", slopes…)` — the directions that must **survive**. Faithful port:
+before the per-direction drop, each kept direction is removed from the droppable set for its grouping
+(`indRem <- unlist(temp) != unlist(keep)`, `:114–123`); after, the kept directions are re-appended so
+every candidate retains them (`:153–164`). Net effect (observed): `keep` pins those directions —
+`pastes` keep `~(1|batch)` → `{(1|batch)+(1|cask), (1|batch)}` (batch never dropped, the original is
+retained as a neighbour). `keep` is supplied to `backwardcandidates` as a parsed `RESpec` floor
+(§5); the intersection is computed on `cnmsform`.
+
+### 2.4 Filters and dedup (order is load-bearing, `:185–198`)
+
+Applied in exactly this order — `cAIC4` does **not** re-dedup after the two filters:
+
+1. **`checkREs` (`:354–384`)** per candidate: drop `NULL`/all-`NA` terms; within each grouping, sort
+   each direction-vector, drop duplicate vectors, and enforce hierarchical order
+   (`checkHierarchicalOrder`) when a grouping has `>1` surviving term.
+2. **ordered-name dedup (`:188–189`)**: sort each candidate's terms by grouping name, then drop a
+   candidate iff *both* it and its name-vector duplicate an earlier one.
+3. **`removeUncor` (`:596–638`, skipped iff `selectcorrelation`)**: drop a candidate iff some grouping
+   has `>1` term among which at least one carries `"(Intercept)"` and at least one does not — i.e. the
+   candidate encodes a correlated→uncorrelated split. (No-op for single-term-per-name candidates, so
+   inert on the correlated representative structures; it bites only on already-split starts.)
+4. **`removeNoInt` (`:643–667`, skipped iff `allownointercept`)**: from each candidate remove every
+   **term** lacking `"(Intercept)"`, then drop candidates left empty. (This — not a per-candidate
+   reject — is why `(1+days|subj)` default yields only `{(1|subj)}`: the `(days|subj)` candidate's
+   sole term is intercept-less and is stripped, emptying it.)
+
+`backwardcandidates` returns `respec` of the surviving candidates, de-duplicated by canonical
+encoding (the post-filter duplicates `cAIC4` may retain are irrelevant to the set oracle; candidate
+**multiplicity/ordering** for the driver is a §4 concern).
+
+### 2.5 The Level-1 set-equality oracle
+
+For each representative `(spec, selectcorrelation, allownointercept, keep)` scenario, with `C_R` the
+candidate set produced by `cAIC4:::backwardStep` and `C_jl = backwardcandidates(spec; …)`:
+
+```
+{ canonical(c) : c ∈ C_R }  ==  { canonical(c) : c ∈ C_jl }        # Set equality, no model fit
+```
+
+Scenarios (and their observed `cAIC4` outputs), pinned in `test/generate_fixtures_stepcaic.R`:
+
+| spec | flags | `cAIC4` candidate set |
+|:-----|:------|:----------------------|
+| `(1+days\|subj)` | default | `{(1\|subj)}` |
+| `(1+days\|subj)` | `allownointercept` | `{(days\|subj), (1\|subj)}` |
+| `(1+days\|subj)` | `selectcorrelation` | `{(1\|subj)}` |
+| `(1\|batch)+(1\|cask)` | default | `{(1\|cask), (1\|batch)}` |
+| `(1\|g)` | default | `{}` (terminal) |
+| `(1\|g)` | `keep ~(1\|g)` | `{(1\|g)}` |
+| `(1+x+y\|g)` | default | `{(1+y\|g), (1+x\|g)}` |
+| `(1+x+y\|g)` | `allownointercept` | `{(x+y\|g), (1+y\|g), (1+x\|g)}` |
+| `(1\|g)+(0+x\|g)` (uncorr.) | default | `{}` |
+| `(1\|g)+(0+x\|g)` (uncorr.) | `selectcorrelation, allownointercept` | `{(x\|g)}` |
+| `(1+days\|subj)+(1\|item)` | default | `{(1+days\|subj), (1\|subj)+(1\|item), (1\|item)}` |
+| `(1+days\|subj)+(1\|item)` | `allownointercept` | `{(1+days\|subj), (days\|subj)+(1\|item), (1\|subj)+(1\|item)}` |
+| `(1\|batch)+(1\|cask)` | `keep ~(1\|batch)` | `{(1\|batch)+(1\|cask), (1\|batch)}` |
+
+This is the §6 Level-1 structure-equality for the backward enumerator; no cAIC value is computed.
 
 ## 3. Forward enumeration — `forwardStep` / `makeForward`
 

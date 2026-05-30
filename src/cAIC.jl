@@ -43,6 +43,7 @@ include("types.jl")          # CAICResult, AnocaicTable (public result types)
 include("scoring.jl")        # the caic methods (the scoring assembly)
 include("comparison.jl")     # the anocaic method (comparison table, M2.5)
 include("respec.jl")         # RESpec extract/render — the M4 RE-structure representation
+include("stepcaic.jl")       # backward/forward candidate enumeration (M4 stepwise search)
 
 # ── Public surface ──────────────────────────────────────────────────────────
 # `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) is
