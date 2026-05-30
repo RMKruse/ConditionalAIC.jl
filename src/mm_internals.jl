@@ -57,6 +57,11 @@ first.
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
+| `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (M4 RE-structure read) |
+| `m.formula.lhs`   | field       | [`responseterm`]    | formula response term; the `lhs` of the rendered candidate formula             |
+| `RandomEffectsTerm` (`.lhs`/`.rhs`) | type/fields | [`reterminfo`] | a correlated RE term: `.lhs` directions `MatrixTerm`, `.rhs` grouping `CategoricalTerm` |
+| `MixedModels.ZeroCorr` (`.term`) | type/field | [`reterminfo`] | an uncorrelated `zerocorr` term; unwrapped to its inner `RandomEffectsTerm` |
+| `MatrixTerm` (`.terms`), `InterceptTerm{B}`, `CategoricalTerm.sym`, `termvars` | StatsModels types/fns | [`reterminfo`], [`fixedterm`] | RE-direction labels (`"(Intercept)"`/slope names), grouping symbol, fixed-part identification |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -71,8 +76,10 @@ module MMInternals
 
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
+    MixedModel,
     LinearMixedModel,
     GeneralizedLinearMixedModel,
+    RandomEffectsTerm,
     AbstractReMat,
     ReMat,
     vsize,
@@ -96,6 +103,11 @@ using ForwardDiff: ForwardDiff
 using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
+
+# StatsModels term types/functions (`MatrixTerm`, `InterceptTerm`, `termvars`, the
+# `FormulaTerm` field layout) are the upstream term representation `m.formula` is built
+# from; interpreting them is a quarantine concern (M4 `reterminfo`/`responseterm`/`fixedterm`).
+const SM = MixedModels.StatsModels
 
 # Raised when an internal touchpoint yields a value of an unexpected type/shape —
 # i.e. `MixedModels` has drifted from the pinned version. Failing loud here turns a
@@ -786,6 +798,94 @@ function _fill_conddraw!(rng, Ystar, μ, d, _m)
             "scope — matches cAIC4's \"not yet supported\" warning.",
         ),
     )
+end
+
+# ── RE-structure interpretation (M4) ───────────────────────────────────────────
+
+"""
+    reterminfo(m::MixedModel) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of `m.formula` (the structural truth) into the raw
+pieces of the `cAIC4` `cnms`-analogue `RESpec` — one entry `(grouping, directions,
+correlated)` per RE term, in formula order:
+
+- `grouping` — the grouping-factor symbol (`ret.rhs.sym` of the `RandomEffectsTerm`);
+- `directions` — the `cnms`-style column labels: `"(Intercept)"` for a random intercept
+  (`InterceptTerm{true}`), then each slope's variable name. A suppressed intercept
+  (`InterceptTerm{false}`, the `0 + …` form) contributes no entry;
+- `correlated` — `false` for a `zerocorr(… | g)` term (`MixedModels.ZeroCorr`), `true` for
+  a plain `(… | g)` (`RandomEffectsTerm`).
+
+This is the **quarantine** read of MixedModels'/StatsModels' term representation
+(`RandomEffectsTerm`, `MixedModels.ZeroCorr`, `MatrixTerm`, `InterceptTerm`, `termvars`):
+the wrapping into `RESpec`/`REGroup` is fit-independent and lives outside the quarantine
+(`src/respec.jl`). Every touched type/field is shape-asserted against the pinned version.
+
+# Throws
+- `ErrorException` (drift) for an unexpected `rhs` element type, a non-`Symbol` grouping, or
+  a slope direction that is not a single-variable term.
+"""
+function reterminfo(m::MixedModel)
+    rhs = m.formula.rhs
+    rhs isa Tuple || _drift("m.formula.rhs", "Tuple", rhs)
+    info = Tuple{Symbol,Vector{String},Bool}[]
+    for t in rhs
+        if t isa SM.MatrixTerm
+            continue                                  # the fixed-effects part
+        elseif t isa MixedModels.ZeroCorr
+            push!(info, _reterm_entry(t.term, false))
+        elseif t isa RandomEffectsTerm
+            push!(info, _reterm_entry(t, true))
+        else
+            _drift("m.formula.rhs element", "MatrixTerm/RandomEffectsTerm/ZeroCorr", t)
+        end
+    end
+    return info
+end
+
+# Read one `RandomEffectsTerm` into `(grouping, directions, correlated)`. `ret.rhs` is the
+# grouping `CategoricalTerm` (its `.sym` is the factor name); `ret.lhs` is the directions
+# `MatrixTerm` (or a bare term for a single direction).
+function _reterm_entry(ret::RandomEffectsTerm, correlated::Bool)
+    grouping = ret.rhs.sym
+    grouping isa Symbol || _drift("RE term grouping `.rhs.sym`", Symbol, grouping)
+    terms = ret.lhs isa SM.MatrixTerm ? ret.lhs.terms : (ret.lhs,)
+    directions = String[]
+    for d in terms
+        if d isa SM.InterceptTerm{true}
+            push!(directions, "(Intercept)")
+        elseif d isa SM.InterceptTerm{false}
+            # suppressed intercept (`0 + …`): contributes no `cnms` column
+        else
+            vars = SM.termvars(d)
+            length(vars) == 1 ||
+                _drift("RE slope direction `termvars`", "a single-variable term", d)
+            push!(directions, string(only(vars)))
+        end
+    end
+    return (grouping, directions, correlated)
+end
+
+"""
+    responseterm(m::MixedModel)
+
+The response (left-hand-side) term of `m.formula` (`m.formula.lhs`) — supplied to
+[`render`](@ref cAIC.render) as the `lhs` of the rebuilt formula. Read from the structural
+truth `m.formula` (quarantine), no shape assertion: any `StatsModels` term is a valid `lhs`.
+"""
+responseterm(m::MixedModel) = m.formula.lhs
+
+"""
+    fixedterm(m::MixedModel) -> StatsModels.MatrixTerm
+
+The fixed-effects `MatrixTerm` of `m.formula` (the leading `m.formula.rhs[1]`) — reattached
+unchanged by [`render`](@ref cAIC.render) (the fixed part is held constant across `stepcaic`
+candidates, CONTEXT.md *Search*). Shape-asserted to be a `MatrixTerm`.
+"""
+function fixedterm(m::MixedModel)
+    fe = m.formula.rhs[1]
+    fe isa SM.MatrixTerm || _drift("m.formula.rhs[1]", "MatrixTerm", fe)
+    return fe
 end
 
 end # module MMInternals
