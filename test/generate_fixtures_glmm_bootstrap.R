@@ -71,12 +71,14 @@ message("Formula pin: conditionalBootstrap matches expected centring and divisor
 # Matches the Julia Level-2 test:
 #   fit(MixedModel, @formula(incid/hsz ~ period + (1|herd)), cbpp, Binomial();
 #       weights=float.(cbpp.hsz), progress=false)
+# lme4's cbpp names the columns `incidence`/`size`; MixedModels.jl's dataset(:cbpp)
+# renames them `incid`/`hsz`. Same data — the Julia Level-2 test uses incid/hsz.
 data(cbpp, package = "lme4")
 m <- glmer(
-  incid / hsz ~ period + (1 | herd),
+  incidence / size ~ period + (1 | herd),
   data    = cbpp,
   family  = binomial,
-  weights = hsz
+  weights = size
 )
 message(sprintf("CBPP Binomial GLMM fitted: sigma = %.6g, theta = %.6g",
                 sigma(m), getME(m, "theta")))
@@ -86,8 +88,10 @@ set.seed(42)  # Reproducible R-side result. The Julia side uses Xoshiro(42) — 
               # different RNG, so the draws differ; agreement within Monte Carlo
               # variance (atol=2.0) is the correct check.
 B <- 500L
+# conditionalBootstrap returns the bias correction (df) directly as an atomic numeric
+# (the `bootBC` scalar), not a list — see cAIC4 R/conditionalBootstrap.R.
 result  <- conditionalBootstrap(m, BootStrRep = B)
-rho_ref <- as.numeric(result$bc)
+rho_ref <- as.numeric(result)
 message(sprintf("rho_ref = %.10g  (B = %d)", rho_ref, B))
 
 # ── Write fixture ─────────────────────────────────────────────────────────────

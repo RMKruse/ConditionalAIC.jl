@@ -46,7 +46,14 @@ first.
 | `m.resp.y`        | field       | [`glmmresponse`]    | response vector y (GLMM, n-vector, on the μ scale)       |
 | `m.resp.d`        | field       | [`glmmdist`]        | GLM distribution family D (from `GeneralizedLinearMixedModel{T,D}`)|
 | `m.LMM.feterm.rank` | field     | [`glmmfixedefrank`] | rank of fixed-effects design in the working LMM          |
-| `m.LMM.reterms`   | field       | [`glmmisfullysingular`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for the all-zero (fully-singular) condition |
+| `m.LMM`           | field       | [`reduceboundary`]  | the working `LinearMixedModel` of a GLMM — source of its `reterms`/`feterm`/`formula` for the reduced fit |
+| `m.LMM.reterms`   | field       | [`glmmisfullysingular`], [`reduceboundary`] | random-effects terms of the working LMM; each `re.λ` diagonal checked for boundary directions (all-zero ⇒ fully singular; some-zero ⇒ reduced) |
+| `m.LMM.feterm` / `m.LMM.formula` | fields | [`reduceboundary`] | fixed-effects term + formula of the working LMM, reused by the reduced GLMM's working LMM |
+| `m.β`             | property    | [`reduceboundary`]  | fitted fixed-effects β̂ (GLMM), reused as the refit's β/β₀ start |
+| `m.wt`            | field       | [`reduceboundary`]  | GLMM prior weights; empty for an unweighted fit (then a length-`n` ones vector is supplied) |
+| `m.resp`          | field       | [`reduceboundary`]  | the `GlmResp` (family/link/response), deep-copied into the reduced GLMM |
+| `vsize(t)` / `nlevs(t)` | unexported fns | [`reduceboundary`] | per-reterm random-effect width and group count — size the reduced `u` scratch |
+| `GeneralizedLinearMixedModel{T,D}(…)` | constructor | [`reduceboundary`] | assemble the reduced GLMM around the reduced working LMM |
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
@@ -68,6 +75,8 @@ using MixedModels:
     GeneralizedLinearMixedModel,
     AbstractReMat,
     ReMat,
+    vsize,
+    nlevs,
     Poisson,
     Binomial,
     Bernoulli,
@@ -240,6 +249,20 @@ function issingular(m::LinearMixedModel)
 end
 
 """
+    issingular(m::GeneralizedLinearMixedModel) -> Bool
+
+Whether the GLMM's working `LinearMixedModel` sits on the boundary — *some* random-effect
+direction has collapsed (`λ[d, d] = 0` for at least one `d`). True for both partial and
+full singularity; [`glmmisfullysingular`] distinguishes the all-collapsed case. This is the
+trigger for the GLMM drop-and-refit cascade ([`reduceboundary`]).
+"""
+function issingular(m::GeneralizedLinearMixedModel)
+    s = MixedModels.issingular(m)
+    s isa Bool || _drift("issingular(m)", Bool, s)
+    return s
+end
+
+"""
     reduceboundary(m::LinearMixedModel{T}) -> Union{Nothing,LinearMixedModel{T}}
 
 Perform **one** structural reduction of a boundary (singular) fit: drop every
@@ -288,7 +311,11 @@ end
 function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
     Snew = length(keep)
     znew = re.z[keep, :]
-    if re.λ isa Diagonal
+    # A `Diagonal` λ (uncorrelated/`zerocorr` term) keeps its diagonal structure only while
+    # more than one direction survives; a single-direction survivor must use the `1×1`
+    # `LowerTriangular` that `MixedModels`' `ReMat{T,1}` stores (its `copyscaleinflate!`
+    # reaches into `λ.data`, which `Diagonal` lacks) — see docs/math/0007 §3.
+    if re.λ isa Diagonal && Snew > 1
         λnew = Diagonal{T}(I, Snew)
         indsnew = collect(range(1; step=Snew + 1, length=Snew))
     else
@@ -435,6 +462,78 @@ function glmmisfullysingular(m::GeneralizedLinearMixedModel)
         any(d -> re.λ[d, d] != 0, 1:S) && return false
     end
     return true
+end
+
+"""
+    reduceboundary(m::GeneralizedLinearMixedModel{T,D})
+        -> Union{Nothing,GeneralizedLinearMixedModel{T,D}}
+
+Perform **one** structural reduction of a boundary (singular) GLMM fit: drop every
+random-effect direction whose relative-covariance diagonal `λ[d, d]` is zero, rebuild the
+reduced GLMM, and refit it under the Laplace approximation (`fast=false, nAGQ=1`). This is
+the `MixedModels.jl` analogue of one level of `cAIC4`'s `deleteZeroComponents.merMod` for a
+`glmerMod` — the same single drop-and-refit operation as the Gaussian
+[`reduceboundary(::LinearMixedModel)`](@ref), with the reduced *working* `LinearMixedModel`
+re-wrapped in a `GeneralizedLinearMixedModel` so the refit maximises the GLMM likelihood.
+
+Per reterm the surviving directions are `keep = {d : λ[d, d] ≠ 0}`: a *partial* drop
+column-subsets the `ReMat` (e.g. `zerocorr(1 + x | g)` with a boundary slope → `(1 | g)`),
+while a reterm with no surviving direction is dropped whole. The fixed-effects term `feterm`,
+family/link (`m.resp`), response `y`, and prior weights are reused; an unweighted GLMM is
+given an explicit length-`n` ones weight vector (matching `MixedModels`' own GLMM
+constructor, whose empty `sqrtwts` would otherwise produce a different working response).
+Each surviving reterm is rebuilt **fresh** (via [`_subsetreterm`], `λ` reset to identity), so
+the returned model shares no mutable state with `m`.
+
+The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref)
+cascades until non-singular). Returns `nothing` when **every** random-effect direction is on
+the boundary (no random-effects model remains — the caller falls back to the
+fixed-effects-only score ρ = rank(X), `docs/math/0006-glmm-bias-correction.md §5`), mirroring
+the `LinearMixedModel` method and `cAIC4`'s `glm` branch.
+
+The reduction logic and the reconstruction are pinned in
+`docs/math/0007-glmm-partial-singularity-reduction.md` §1–§3.
+"""
+function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
+    lmm = m.LMM
+    reduced = AbstractReMat{T}[]
+    for re in lmm.reterms
+        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
+        S = size(re.λ, 1)
+        keep = [d for d in 1:S if re.λ[d, d] != 0]
+        isempty(keep) && continue
+        push!(reduced, _subsetreterm(re, keep))
+    end
+    isempty(reduced) && return nothing
+
+    y = glmmresponse(m)                       # m.resp.y, shape-asserted to Vector{T}
+    β = m.β
+    β isa Vector{T} || _drift("m.β", Vector{T}, β)
+    wt = m.wt
+    wt isa Vector{T} || _drift("m.wt", Vector{T}, wt)
+    lwts = isempty(wt) ? fill(one(T), length(y)) : copy(wt)
+
+    rlmm = LinearMixedModel(copy(y), lmm.feterm, reduced, lmm.formula, lwts)
+    u = [fill(zero(T), vsize(t), nlevs(t)) for t in rlmm.reterms]
+    vv = length(u) == 1 ? vec(first(u)) : similar(y, 0)
+    mr = GeneralizedLinearMixedModel{T,D}(
+        rlmm,
+        copy(β),
+        copy(β),
+        rlmm.θ,
+        copy.(u),
+        u,
+        zero.(u),
+        deepcopy(m.resp),
+        similar(y),
+        copy(wt),
+        similar(vv),
+        similar(vv),
+        similar(vv),
+        similar(vv),
+    )
+    fit!(mr; fast=false, nAGQ=1, progress=false)
+    return mr
 end
 
 # ── GLMM accessors (M3) ────────────────────────────────────────────────────────
