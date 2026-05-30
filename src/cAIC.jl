@@ -42,6 +42,7 @@ include("components.jl")     # fit-extracted arrays → GaussianComponents (uses
 include("types.jl")          # CAICResult, AnocaicTable (public result types)
 include("scoring.jl")        # the caic methods (the scoring assembly)
 include("comparison.jl")     # the anocaic method (comparison table, M2.5)
+include("respec.jl")         # RESpec extract/render — the M4 RE-structure representation
 
 # ── Public surface ──────────────────────────────────────────────────────────
 # `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) is
