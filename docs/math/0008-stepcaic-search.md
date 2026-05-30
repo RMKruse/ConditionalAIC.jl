@@ -45,7 +45,50 @@ divergence; `data`-required refit).
   `CONTEXT.md` (*Selection*). Serial execution; a single forwarded `rng` makes bootstrap-GLMM
   candidates reproducible.
 
-> *(to fill: notation for the candidate node — a fitted model + its `CAICResult` + provenance.)*
+### 0.1 The `lm`/`glm` terminal node
+
+A backward step removes random-effects terms one at a time; removing the *last* `|` term leaves a
+fixed-effects-only model, which `MixedModels.jl` (v5.5.1) cannot represent — `fit(MixedModel, …)`
+requires at least one RE term. The search therefore bottoms out at a plain `GLM.jl` `lm`/`glm`
+fit, scored as a search node by `caic(::RegressionModel)` (`src/scoring.jl`, ADR-0006). This
+reproduces `cAIC4`'s own terminal: in `R/cAIC.R:201–240` the `c("glm","lm")` branch scores the
+fixed-effects fit directly rather than via the `merMod` bias-correction path.
+
+A terminal candidate is the pair `(m, r)` where `m` is the fitted `GLM` object and
+`r = caic(m)` is its `CAICResult`, with provenance `method = :terminal`, `bsource = :na`,
+`reducedmodel = nothing`, `refit = false` (a fixed-effects fit is never singular in the RE sense
+and is never reduced-and-refit). The conditional AIC at the terminal is the *unconditional* AIC of
+the `(g)lm` — there are no random effects to condition on, so `ℓ_cond` collapses to the ordinary
+log-likelihood at the fitted mean `μ̂ = Xβ̂`:
+
+```
+ρ_terminal   = rank(X) + 1                       # cAIC4's (g)lm df: # estimated params (β̂ and, for
+                                                 #   Gaussian, σ̂); rank(X) = length(coef(m))
+ℓ_cond       = Σᵢ log f(yᵢ; μ̂ᵢ, φ)               # family log-density at μ̂, summed over observations
+cAIC_terminal = −2·ℓ_cond + 2·ρ_terminal
+```
+
+The `+1` in `ρ` counts the scale/extra parameter that the `(g)lm` estimates beyond `β`: for the
+Gaussian `lm`, `σ̂`; for the one-parameter Poisson/Bernoulli/Binomial families, the dispersion
+slot `cAIC4` still adds (matching its `rank + 1`). The family densities reuse the M3 `Loglik`
+kernels at `μ̂`:
+
+| Terminal family            | `μ̂`                       | `ℓ_cond` kernel                          | Scale `φ`                    |
+|----------------------------|---------------------------|------------------------------------------|------------------------------|
+| Gaussian `lm`              | `Xβ̂` (`predict`)          | `condloglik(y, μ̂, σ̂)` (∑ `dnorm`)        | `σ̂ = √(deviance(lm)/n)` (MLE)|
+| Poisson `glm` (log)        | `exp(Xβ̂)`                 | `condloglik_poisson(y, μ̂)` (∑ `dpois`)   | —                            |
+| Bernoulli `glm` (logit)    | `logistic(Xβ̂)`           | `condloglik_bernoulli(y, μ̂)` (∑ `dbinom`, n≡1) | —                      |
+| multi-trial Binomial `glm` | `logistic(Xβ̂)`           | `condloglik_binomial(y, μ̂, n)` (corrected) | trial counts `nᵢ` = prior wts|
+
+The Gaussian `σ̂` is the **MLE** rescaling `cAIC4` applies, `summary$sigma·√((n−p)/n) = √(RSS/n) =
+√(deviance(lm)/n)` (deviance of an `lm` is the residual sum of squares). The multi-trial Binomial
+row is the documented **deviation**: `cAIC4`'s binomial `getcondLL` returns `−∞` for `nᵢ > 1`
+(it evaluates `dbinom` on the success proportion with `size = |unique(y)|−1`), so the terminal
+reuses the corrected `condloglik_binomial` at the true trial counts, exactly as the M3 GLMM
+binomial path does (DECISIONS 2026-05-29 / 2026-05-30). Bernoulli (`nᵢ ≡ 1`) does not deviate.
+
+An *unsupported* terminal family (anything other than the four rows above — e.g. a Gamma `glm`)
+fails loudly with `ArgumentError` rather than returning a silently-wrong number.
 
 ## 1. The RE-structure spec (`cnms` analogue) and `getComponents`
 

@@ -6,6 +6,64 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-30 — Added `GLM` as a direct runtime dependency (exact-pinned), for the `lm`/`glm` terminal
+
+**Status:** accepted (design — ADR-0006, issue #36). Milestone M4.
+
+**Reason.** A backward `stepcaic` search drops random-effects terms one at a time; dropping the
+*last* RE term yields a fixed-effects-only model. `MixedModels.jl` v5.5.1 cannot represent or fit
+a no-RE model (`fit(MixedModel, …)` requires at least one `|` term), so this **terminal node**
+must be fit and scored as a plain `GLM.jl` `lm`/`glm` — exactly as `cAIC4` does at the same point
+(`cAIC4:::cAIC`, the `c("glm","lm")` branch). The terminal scoring (`caic(::RegressionModel)`,
+`src/scoring.jl`) is built on `GLM.jl`'s public surface (`lm`/`glm`, `response`, `predict`,
+`deviance`, `coef`, the `LinearModel`/`GeneralizedLinearModel` types). The full rationale, the
+alternatives weighed, and the coupled `CAICResult` widening are recorded in
+[ADR-0006](docs/adr/0006-glm-terminal-and-result-generalization.md).
+
+**Exact pin (CLAUDE.md §3).** `GLM` is pinned to `=1.9.5` in **both** `Project.toml` and
+`test/Project.toml`, walked on any version bump exactly like the `MixedModels` pin. `GLM` is
+already a *transitive* dependency of `MixedModels` (5.5.1 resolves `GLM` 1.9.5), so promoting it to
+an explicit, exact-pinned direct dependency adds **no** resolved-environment drift — only the
+direct `[deps]`/`[compat]` entries. `RegressionModel` (the widened `CAICResult` bound, =
+`StatsAPI.RegressionModel`) is sourced through `GLM`'s re-export, so no further direct dependency
+(e.g. `StatsAPI`) is introduced.
+
+**No quarantine impact.** Fitting and scoring the terminal touches **no** `MixedModels` internals
+(public `GLM.jl` + StatsModels formula API), so the `src/mm_internals.jl` internal-access table is
+unchanged by this addition (ADR-0006, Consequences).
+
+---
+
+## 2026-05-30 — `lm`/`glm` terminal scoring: Level-2 tolerance (`atol=1e-3`) and the multi-trial-Binomial terminal deviation
+
+**Status:** accepted (validation — issue #36, ADR-0006). Milestone M4; fixture
+`test/fixtures/caic_glm_terminal_level2.h5` (generator `test/generate_fixtures_glm_terminal.R`);
+tests `test/glm_terminal_tests.jl`.
+
+**The Level-2 band.** The terminal `caic(::RegressionModel)` is validated end-to-end against
+`cAIC4`'s public `cAIC()` on the `c("glm","lm")` branch: the Gaussian `lm`, the log-link Poisson
+`glm`, and the logit-link Bernoulli `glm`. The shared `(df, condloglik, caic)` triple must agree
+within **`atol=1e-3`** — the same Level-2 band carried by the GLMM end-to-end cases (entry
+2026-05-29). The terminal sits *far* inside it: an `lm` is a deterministic OLS solve and a `glm` is
+IRLS to the same MLE, so with the sample **embedded** in the fixture (R and Julia score identical
+data — their RNGs never meet) the discrepancy is ~machine precision, not the iterative-LMM
+discrepancy the band was originally sized for. The band is retained (not tightened) for consistency
+with the rest of the Level-2 suite. cAIC4's `(g)lm` df is `rank + 1`, and its Gaussian σ̂ is the MLE
+rescaling `summary$sigma·√((n−p)/n) = √(RSS/n) = √(deviance(lm)/n)` — reproduced exactly.
+
+**The multi-trial-Binomial terminal deviation.** A multi-trial Binomial `glm` (per-observation
+trial counts nᵢ > 1) has **no finite `cAIC4` reference**: `cAIC4`'s binomial `getcondLL` evaluates
+`dbinom` on the success *proportion* with `size = |unique(y)|−1`, returning `−∞` (the defect
+documented in entry 2026-05-29). The terminal therefore reuses the corrected `condloglik_binomial`
+at the true trial counts (recovered from the fit's prior weights, `m.model.rr.wts`) — exactly as
+the M3 GLMM binomial path does (entry 2026-05-29). Ground truth is base-R `dbinom(kᵢ, nᵢ, μ̂ᵢ)`
+embedded in the fixture (a Level-1-style reference), validated at the same `atol=1e-3`; the test
+also asserts the result is finite, unlike cAIC4's `−∞`. Bernoulli (nᵢ ≡ 1) does **not** deviate:
+there `cAIC4`'s `size = |unique(y)|−1 = 1` is correct, so `condloglik_bernoulli` matches `cAIC4`
+exactly and is cross-checked against the live `cAIC4` reference above.
+
+---
+
 ## 2026-05-30 — `stepcaic` (M4) search scope: random-effects only, fixed effects held constant
 
 **Status:** accepted (design — grilled 2026-05-30). Milestone M4; math spec

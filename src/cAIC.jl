@@ -6,17 +6,31 @@ mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStat
 — a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
 
 [`caic`](@ref) scores a fitted model by its conditional AIC: a Gaussian `LinearMixedModel`
-via the analytic Greven–Kneib bias correction (M2), or a `GeneralizedLinearMixedModel`
-via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3). Both
-assemble into a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models
-by cAIC (M2.5), returning an [`AnocaicTable`](@ref). The search verb (`stepcaic`, M4)
-remains a stub. All access to `MixedModels.jl` internals is quarantined in the
-[`cAIC.MMInternals`](@ref) submodule.
+via the analytic Greven–Kneib bias correction (M2), a `GeneralizedLinearMixedModel`
+via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3), or — as the
+terminal node a backward `stepcaic` search reaches when the last random-effects term is dropped —
+a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`, M4 / ADR-0006). All assemble into
+a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5),
+returning an [`AnocaicTable`](@ref). The search verb (`stepcaic`, M4) remains a stub. All access to
+`MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
 
 using MixedModels:
     MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli, Binomial
+using GLM:
+    GLM,
+    RegressionModel,
+    LinearModel,
+    GeneralizedLinearModel,
+    coef,
+    response,
+    predict,
+    deviance
+# `TableRegressionModel` (the `lm`/`glm` formula-fit wrapper) is not exported by GLM; it lives
+# in StatsModels, reachable through GLM's loaded copy. Aliased here so the terminal-scoring
+# dispatch (`src/scoring.jl`) can name the type without taking a separate StatsModels dependency.
+const TableRegressionModel = GLM.StatsModels.TableRegressionModel
 using Random: AbstractRNG, default_rng, randn
 
 include("numerics.jl")
