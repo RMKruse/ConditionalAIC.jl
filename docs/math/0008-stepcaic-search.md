@@ -94,18 +94,85 @@ fails loudly with `ArgumentError` rather than returning a silently-wrong number.
 
 The fit-independent representation enumeration operates on. The Julia analogue of `cAIC4`'s `cnms`
 (a named list `grouping → c(term-labels)`): each grouping factor mapped to its ordered list of RE
-directions (`"(Intercept)"` / `"0"` + slope variables) plus a per-group correlated/uncorrelated
-flag.
+directions (`"(Intercept)"` + slope variables) plus a per-group correlated/uncorrelated flag.
 
-- **Extraction** (`getComponents` analogue): from `m.formula` (the structural truth), interpreting
-  the MixedModels RE-term types. This interpretation touches MixedModels' term representation and
-  is therefore a **`mm_internals.jl` quarantine** concern — add the touched types/accessors to the
-  internal-access table before coding (CLAUDE.md §3).
-- **Rendering** (`cnmsConverter` + `makeFormula` analogue): spec → `FormulaTerm`, with the fixed
-  part reattached unchanged, handed to the public `fit`.
+### 1.1 The `RESpec` struct
 
-> *(to fill: the `RESpec` struct fields and the extraction/render maps; the round-trip invariant
-> `render(extract(m)) ≈ m.formula` on structure.)*
+A `RESpec` is an ordered list of `REGroup`s, one per random-effects term in the formula (matching
+the order of the `|` terms in `m.formula.rhs`). Each `REGroup` is the Julia analogue of one
+`(grouping, cnms-entry)` pair of `cAIC4`'s `object@cnms`, plus the correlated flag MixedModels
+encodes structurally (`RandomEffectsTerm` vs `ZeroCorr`) that `lme4`'s `cnms` does not carry:
+
+```
+REGroup
+  grouping   :: Symbol           # the grouping-factor name (cnms list name; e.g. :subj)
+  directions :: Vector{String}   # cnms-style column labels, intercept first:
+                                 #   "(Intercept)" present ⇔ the term carries a random intercept;
+                                 #   the remaining entries are slope variable names ("days", …).
+                                 #   A no-intercept term (0 + x | g) omits "(Intercept)".
+  correlated :: Bool             # true for (… | g) (RandomEffectsTerm), false for zerocorr(… | g)
+
+RESpec
+  groups :: Vector{REGroup}      # ordered, one per RE term
+```
+
+`directions` is the faithful `cnms` analogue: `cAIC4`'s `object@cnms[[g]]` is exactly this list of
+column labels (with `"(Intercept)"` for the random intercept). Both fields are concrete
+(`Vector{String}`/`Symbol`/`Bool`), so `REGroup`/`RESpec` are type-stable (CLAUDE.md §4). Two specs
+compare **by value** (`==` defined field-wise over `groups`), which is the round-trip oracle below.
+
+### 1.2 Extraction — `extract(::MixedModel) -> RESpec` (`getComponents` analogue)
+
+From `m.formula` (the structural truth, not the fit-mutated `m.reterms` whose `λ` a singular fit has
+zeroed). For each RE term in `m.formula.rhs` (every tuple element after the leading fixed-effects
+`MatrixTerm`):
+
+- unwrap `ZeroCorr` to its inner `RandomEffectsTerm`, recording `correlated = false` (else `true`);
+- `grouping` ← the inner term's `rhs` `CategoricalTerm` symbol (`ret.rhs.sym`);
+- `directions` ← map over the lhs `MatrixTerm` directions (`ret.lhs.terms`): `InterceptTerm{true}`
+  ↦ `"(Intercept)"`; `InterceptTerm{false}` (a suppressed intercept, `0 + …`) contributes nothing;
+  any other term ↦ its variable name (`string(only(termvars(t)))`).
+
+Interpreting these MixedModels/StatsModels term types touches the upstream term representation and
+is therefore a **`mm_internals.jl` quarantine** concern (CLAUDE.md §3): the accessor `reterminfo(m)`
+returns the raw `Vector{(grouping, directions, correlated)}`, shape-asserted against the pinned
+version; `extract` only wraps those tuples into `REGroup`/`RESpec` (no internal access). The response
+term and fixed-effects `MatrixTerm` are read by the companion quarantine accessors `responseterm(m)`
+(`m.formula.lhs`) and `fixedterm(m)` (`m.formula.rhs[1]`), supplied to `render` as `lhs`/`fixed`.
+
+### 1.3 Rendering — `render(::RESpec, fixed, lhs) -> FormulaTerm` (`cnmsConverter` + `makeFormula`)
+
+Spec → `FormulaTerm`, with the fixed-effects part reattached unchanged, handed to the public `fit`.
+Built on the **public** StatsModels/MixedModels formula API only (no internals): `term`, the term
+algebra `+`/`|`, the exported `zerocorr`, and the `FormulaTerm` constructor. Per `REGroup`, the
+`cnmsConverter` rule reconstructs the directions term:
+
+- each `"(Intercept)"` ↦ `term(1)`; each slope label `s` ↦ `term(Symbol(s))`;
+- if no `"(Intercept)"` is present, append `term(0)` (the suppressed-intercept marker `0`), exactly
+  as `cnmsConverter` appends `"0"`;
+- sum the direction terms and group: `lhsexpr | term(grouping)`, wrapping in `zerocorr(…)` when
+  `correlated == false`.
+
+The RE terms are summed and appended to the unchanged `fixed` term; `FormulaTerm(lhs, fixed + ΣRE)`
+is the rendered formula. An empty spec (`isempty(groups)`) cannot be rendered to a `MixedModel`
+formula (MixedModels requires ≥ 1 `|` term — the no-RE case is the `lm`/`glm` terminal of §0.1, not
+a `RESpec`) and raises `ArgumentError`.
+
+### 1.4 The round-trip invariant
+
+`extract` and `render` are mutually inverse **on structure** (not on `λ`/`θ`, which are re-estimated
+by the refit). The oracle, on a model `m` with `s = extract(m)`:
+
+```
+fit(MixedModel, render(s, fixedterm(m), responseterm(m)), data)   # refit the rendered formula
+extract(refit) == s                                               # structurally identical
+```
+
+asserted (`==`, by value) on `sleepstudy` (`1 + days + (1 + days | subj)`, correlated slope +
+intercept), `Pastes` (`1 + (1 | batch) + (1 | cask)`, crossed intercept-only), the `zerocorr`
+variant (`correlated = false` preserved), and the no-intercept variant (`0 + days | subj`,
+`directions == ["days"]`). This is the §6 Level-1-style structure equality for the representation
+layer — no cAIC value is computed; the candidate enumeration of §2–§3 builds on it.
 
 ## 2. Backward enumeration — `backwardStep` / `makeBackward`
 
