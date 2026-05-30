@@ -6,6 +6,73 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-30 — `stepcaic` (M4) search scope: random-effects only, fixed effects held constant
+
+**Status:** accepted (design — grilled 2026-05-30). Milestone M4; math spec
+`docs/math/0008-stepcaic-search.md`; see `CONTEXT.md` (*Search*) and `PARITY.md` (stepcaic row).
+
+`cAIC4`'s `stepcAIC` searches only **random-effects** structure for the `(g)lmer` use case: in
+`makeFormula` (`R/helperfuns_stepcAIC.R`) the fixed-effects part (`nobarsF`) is carried through
+**unchanged** on every candidate, and `fixEfCandidates` feed only the `gamm4` smooth-term route
+(`forwardGam`), which is milestone M5. `cAIC.jl`'s `stepcaic` matches this: every candidate keeps
+the original model's fixed-effects part fixed; only RE terms are added/dropped.
+
+**Why this is recorded.** PARITY.md previously described the row as "RE structure primary, FE
+optional", which over-claimed: `cAIC4` performs **no** fixed-effects selection for mixed models.
+Fixed-effects *selection* would be a deliberate extension **beyond** `cAIC4` with **no R ground
+truth** to validate against (Level-2 impossible by construction), so it is deferred and would
+carry its own justification if ever added. Not a tolerance — a scope boundary.
+
+---
+
+## 2026-05-30 — `stepcaic` (M4) controller: faithful port of `cAIC4`'s decision cascade; near-tie path divergence is inherent
+
+**Status:** accepted (design — grilled 2026-05-30). Milestone M4; math spec
+`docs/math/0008-stepcaic-search.md`.
+
+The greedy controller reproduces `cAIC4`'s decision cascade (`R/stepcAIC.R:565–657`) predicate
+for predicate: the `≤` acceptance rule, the `equalToLastStep` plateau guard, the
+`improvementInBoth` alternation for `direction="both"` (which starts **forward**,
+`R/stepcAIC.R:389`), and the stop predicates (`minCAIC==Inf`, reached `lm`/`glm`, reached the
+`keep`-minimal model, a single candidate, `steps` exhausted). Singular candidates are **carried
+forward as fit** (not replaced by their reduced model — `R/stepcAIC.R:323–324`, the
+`object <- reducedModel` line is commented out upstream), with the reduced-model cAIC driving
+selection and the `refit` flag recorded.
+
+**The inherent divergence.** Faithful path replication requires identical cAIC *values* at each
+step to make identical greedy choices. `lme4` and `MixedModels.jl` do not produce bit-identical
+fits (CLAUDE.md §6), so a candidate whose cAIC sits within the Level-2 fit-discrepancy band of
+the incumbent can be accepted by one ecosystem and rejected by the other — flipping the path on a
+**near tie**. This is not a bug and not a tolerance to tighten: it is the propagation of the
+documented fit discrepancy through a discrete decision. **Validation consequence:** Level-2
+asserts the selected RE structure and `bestCAIC` (within the per-method atol band) on every
+fixtured scenario, and the full step *path* only on scenarios where successive cAICs are
+well-separated relative to that band. The fit-independent search combinatorics are pinned
+separately at Level-1 (candidate-set equality vs `backwardStep`/`forwardStep`).
+
+---
+
+## 2026-05-30 — `stepcaic` (M4) refit mechanism requires the source `data` table
+
+**Status:** accepted (design — grilled 2026-05-30). Milestone M4.
+
+Every candidate is represented as a formula and refit via the **public**
+`fit(MixedModel, formula, data)` (forward steps add new design columns, which a fitted
+`MixedModels` object does not retain — `m.formula` is kept but the source table is not). `stepcaic`
+therefore **requires** a `data` argument (a Tables.jl-compatible table containing the response,
+the fixed-effects variables, and every `groupcandidates`/`slopecandidates` variable), mirroring
+`cAIC4`'s mandatory `data` argument (`R/stepcAIC.R:197–207`, which errors if `data` is absent).
+
+**Why recorded, though not a numerical divergence.** Backward-only search *could* have reused the
+internal `ReMat` column-subset machinery (`_subsetreterm`, the reduced-model reconstruction) and
+run table-free; the design chose **one uniform formula+fit mechanism** for all directions instead,
+mirroring `cAIC4`'s `update()`-based refit so Level-2 validation is apples-to-apples and
+`direction=:both` is a pure formula transform. The cost — `data` is mandatory even for pure
+backward search — is the recorded consequence. See ADR-0006 (the `lm`/`glm` terminal of this same
+mechanism) and `docs/math/0008`.
+
+---
+
 ## 2026-05-29 — GLMM partial-singularity reduction: reconstruction-fidelity tolerance (objective `atol=1e-6`, θ/β `atol=1e-5`)
 
 **Status:** accepted (measured). Issue #32 (M3); math spec `docs/math/0007-glmm-partial-singularity-reduction.md`.

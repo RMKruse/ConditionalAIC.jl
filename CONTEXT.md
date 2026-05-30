@@ -33,8 +33,11 @@ Computing the cAIC value for *one* fitted model. The M2 deliverable.
 Choosing among models by cAIC. Two distinct forms, kept separate:
 - **Comparison** — scoring a user-supplied *fixed set* of fitted models and ranking them
   (`cAIC4`'s `anocAIC`; our port `anocaic`). The literal "best from among several".
-- **Search** — generating and exploring a *candidate space* (add/drop random- or fixed-effects
-  terms) to find a good model (the `stepcAIC` layer, M4).
+- **Search** — generating and exploring a *candidate space* by adding/dropping **random-effects**
+  terms to find a good model (the `stepcAIC` layer, M4). The **fixed-effects part is held
+  constant** on every candidate, matching `cAIC4`'s `(g)lmer` path (its `fixEfCandidates` feed
+  only the `gamm4` smooth-term route, which is M5). Fixed-effects *selection* would be a deliberate
+  extension **beyond** `cAIC4` and is deferred (no R ground truth to validate against).
 Both build on Scoring; both require every candidate to be scored *consistently* (same
 REML/`method`/B-source/`sigmapenalty`), which the result's provenance enforces.
 _Avoid_: using "model selection" to mean scoring one model, or conflating Comparison (a given
@@ -46,6 +49,26 @@ weight), rather than selecting a single model. `cAIC4`'s `modelAvg` / `predictMA
 Distinct from Selection: it keeps all the models and blends them. In the parity goal as its own
 milestone **M4.5** (CLAUDE.md §11); outside the near-term scope.
 _Avoid_: conflating with Comparison (which ranks and picks one) or Search.
+
+**RE-structure spec** (the `cnms` analogue):
+The internal, fit-independent description of a candidate's random-effects structure: each grouping
+factor mapped to its list of RE directions (intercept + slopes) plus a correlated/uncorrelated
+flag. The Julia analogue of `cAIC4`'s `cnms` named list. The **Search** enumerates neighbors by
+pure add/drop transforms on this spec and renders it to a formula only at fit time; candidates are
+refit via the public `fit(MixedModel, formula, data)`.
+_Avoid_: conflating the spec (structure) with the fitted candidate (a model object).
+
+**lm/glm terminal**:
+The model a backward **Search** reaches when the *last* random-effects term is dropped — a
+fixed-effects-only `lm`/`glm` (MixedModels.jl cannot fit a no-RE model, so the terminal is a
+`GLM.jl` fit). Scored with `df = rank + 1` and the conditional (= marginal here) log-likelihood,
+matching `cAIC4`'s `cAIC` for `(g)lm`. A first-class endpoint of the search, not an error.
+_Avoid_: "empty model" — it still carries the (fixed) fixed-effects part.
+
+**Search path**:
+The ordered record of the greedy **Search** — per step, the direction, the candidates scored and
+their cAICs, and the move taken. Returned in the result (replacing `cAIC4`'s printed `trace`) and
+the primary artifact for end-to-end validation against `cAIC4`'s step sequence.
 
 **Singular fit**:
 A fit in which one or more random-effects variance components are estimated on the **boundary**
