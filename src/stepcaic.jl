@@ -68,11 +68,70 @@ function _canonkey(cand::Vector{_Term})
     return join(sort(terms), ";")
 end
 
-# `checkREs` (`R/helperfuns_stepcAIC.R:354`): per candidate, drop NA/empty terms, then within
-# each grouping sort each direction-vector and drop duplicate vectors. The source's
-# `checkHierarchicalOrder` step only fires when one grouping keeps **>1** distinct term, which a
-# backward single-term-per-grouping candidate never produces — it is a forward/nesting concern
-# (docs/math/0008 §3) and is unreachable here.
+# Lexicographic `k`-combinations of `v` (R's `combn`), order-preserving. Dependency-free (no
+# `Combinatorics.jl`); used by the forward add-set (§3.1) and `_allcombn`.
+function _combinations(v::Vector{T}, k::Int) where {T}
+    n = length(v)
+    res = Vector{Vector{T}}()
+    (k < 0 || k > n) && return res
+    k == 0 && (push!(res, T[]); return res)
+    idx = collect(1:k)
+    while true
+        push!(res, v[idx])
+        i = k
+        while i >= 1 && idx[i] == n - k + i
+            i -= 1
+        end
+        i == 0 && break
+        idx[i] += 1
+        for j in (i + 1):k
+            idx[j] = idx[j - 1] + 1
+        end
+    end
+    return res
+end
+
+# `allCombn` (`R/helperfuns_stepcAIC.R:4`): all **proper** sub-combinations of `x` (sizes
+# `1:length(x)-1`). Used by `checkHierarchicalOrder` to find the smaller terms a larger term
+# subsumes. `x` arrives sorted (from `checkREs`), so the returned sub-combos are sorted too.
+function _allcombn(x::Vector{String})
+    out = Vector{Vector{String}}()
+    for k in 1:(length(x) - 1)
+        for c in _combinations(x, k)
+            push!(out, c)
+        end
+    end
+    return out
+end
+
+# `checkHierarchicalOrder` (`R/helperfuns_stepcAIC.R:317`): given the (sorted, de-duplicated)
+# direction-vectors of **one** grouping, drop every term that is a proper sub-combination of a
+# longer surviving term — `(1|g)` is redundant once `(1+x|g)` is present. Faithful port of the
+# load-bearing quirks: `lenMax`/`lenMin` are fixed before the loop, the index `i` advances over the
+# *shrinking* list, and `listIn[i]` (never its own proper sub-combo) is retained.
+function _checkhierorder(terms::Vector{Vector{String}})
+    isempty(terms) && return terms
+    listin = sort(terms; by=length, rev=true)
+    lenmax = length(listin[1])
+    lenmin = length(listin[end])
+    i = 1
+    while i < length(listin)
+        leni = length(listin[i])
+        if lenmax > 1 && leni > lenmin
+            notallowed = _allcombn(listin[i])
+            listin = Vector{String}[v for v in listin if !(v in notallowed)]
+        end
+        i += 1
+    end
+    return listin
+end
+
+# `checkREs` (`R/helperfuns_stepcAIC.R:354`): per candidate, drop NA/empty terms, then within each
+# grouping sort each direction-vector, drop duplicate vectors, and — when a grouping keeps **>1**
+# distinct term — enforce hierarchical order. A backward single-term-per-grouping candidate never
+# trips the `>1` branch (it is a no-op there); the forward enumerator (§3.2) reaches it when a
+# multi-direction slope combination is added to an existing term, so the step lives in the shared
+# `checkREs` rather than a forward-only fork.
 function _checkres(cand::Vector{_RawTerm})
     live = _Term[]
     for (nm, d) in cand
@@ -82,13 +141,13 @@ function _checkres(cand::Vector{_RawTerm})
     end
     result = _Term[]
     for nm in unique(Symbol[t[1] for t in live])
-        seen = Vector{String}()
         uniq = Vector{Vector{String}}()
         for (tn, d) in live
             tn == nm || continue
             sd = sort(d)
             sd in uniq || push!(uniq, sd)
         end
+        length(uniq) > 1 && (uniq = _checkhierorder(uniq))
         for v in uniq
             push!(result, (nm, v))
         end
@@ -321,4 +380,241 @@ function backwardcandidates(
         push!(out, _respec(c))
     end
     return out
+end
+
+# `unique(c(unlist(cnms), slopeCandidates), incomparables = "(Intercept)")` (`forwardStep:526`): the
+# `incomparables = "(Intercept)"` keeps every intercept label (never de-duplicated), de-duplicating
+# only the slope variables. The duplicate single-intercept combinations this yields are removed by
+# the combo-dedup and the final candidate dedup, so the candidate **set** is unchanged.
+function _uniqueslopes(v::Vector{String})
+    out = String[]
+    for x in v
+        if x == "(Intercept)"
+            push!(out, x)
+        elseif !(x in out)
+            push!(out, x)
+        end
+    end
+    return out
+end
+
+# length of the **first** `cnms` entry named `g` (R's `cnms[[g]]`), 0 if absent. The one-larger
+# restriction (`forwardStep:566`) measures an existing grouping's current size against this.
+function _firstlen(cnms::Vector{_Term}, g::Symbol)
+    for (nm, d) in cnms
+        nm == g && return length(d)
+    end
+    return 0
+end
+
+# The `forwardStep` transform on `cnms` form (`R/helperfuns_stepcAIC.R:516–590`), returning the
+# post-filter clean candidates one direction **larger** than `cnms`. `nrofcombs` is the slope-combo
+# cap (`maxslopes + 1`, the `+1` the intercept slot, driver redefine `R/stepcAIC.R:302`).
+function _forwardstep(
+    cnms::Vector{_Term};
+    slopecandidates::Vector{String},
+    groupcandidates::Vector{Symbol},
+    nrofcombs::Int,
+    useacross::Bool,
+    selectcorrelation::Bool,
+)
+    # allSlopes (:525): existing directions ∪ candidates under useacross, else candidates ∪ intercept.
+    allslopes = if useacross
+        _uniqueslopes(vcat([d for (_, ds) in cnms for d in ds], slopecandidates))
+    else
+        vcat(slopecandidates, ["(Intercept)"])
+    end
+
+    # allGroups (:529): existing groupings ∪ candidates, first-appearance order.
+    allgroups = Symbol[]
+    for (nm, _) in cnms
+        nm in allgroups || push!(allgroups, nm)
+    end
+    for g in groupcandidates
+        g in allgroups || push!(allgroups, g)
+    end
+
+    # allSlopeCombs (:533–543): all size-i combos (i ≤ min(nrofcombs, #slopes)) with no repeated label.
+    combs = Vector{Vector{String}}()
+    for i in 1:nrofcombs
+        i <= length(allslopes) || continue
+        for c in _combinations(allslopes, i)
+            length(unique(c)) == length(c) && push!(combs, c)
+        end
+    end
+
+    # cross product (:545–548): every (group, combo) appended to cnms.
+    assembled = Vector{Vector{_Term}}()
+    for combo in combs
+        for g in allgroups
+            cand = copy(cnms)
+            push!(cand, (g, combo))
+            push!(assembled, cand)
+        end
+    end
+
+    # checkREs (:549) — drops/sorts/dedups and collapses hierarchical sub-terms (§3.2).
+    cands = Vector{_Term}[_checkres(_RawTerm[(nm, d) for (nm, d) in c]) for c in assembled]
+
+    # same-grouping reject (:550–552, skipped under selectcorrelation): no grouping in >1 term.
+    if !selectcorrelation
+        cands = Vector{_Term}[
+            c for c in cands if length(unique(Symbol[t[1] for t in c])) == length(c)
+        ]
+    end
+
+    # dedup (:553) + drop-original (:554): discard a candidate equal to the (sorted) input cnms.
+    cnmskey = _canonkey(cnms)
+    seen = Set{String}()
+    deduped = Vector{_Term}[]
+    for c in cands
+        isempty(c) && continue
+        k = _canonkey(c)
+        (k == cnmskey || k in seen) && continue
+        push!(seen, k)
+        push!(deduped, c)
+    end
+
+    # removeUncor (:563, skipped under selectcorrelation).
+    selectcorrelation || (deduped = _removeuncor(deduped))
+
+    # one-direction-larger (:566–582): a new grouping may gain 1 direction; an existing one grows ≤ 1.
+    cnmsnames = Set(nm for (nm, _) in cnms)
+    out = Vector{_Term}[]
+    for c in deduped
+        violates = false
+        for (g, dirs) in c
+            if g in cnmsnames
+                length(dirs) > _firstlen(cnms, g) + 1 && (violates=true; break)
+            else
+                length(dirs) > 1 && (violates=true; break)
+            end
+        end
+        violates || push!(out, c)
+    end
+    return out
+end
+
+"""
+    forwardcandidates(spec::RESpec; slopecandidates=Symbol[], groupcandidates=Symbol[],
+                      maxslopes=2, useacross=false, selectcorrelation=false) -> Vector{RESpec}
+
+Enumerate the random-effects structures one direction **larger** than `spec` — the faithful port of
+`cAIC4`'s internal `forwardStep`, the forward branch of the `stepcaic` search (M4).
+
+Each returned [`RESpec`](@ref) adds a single random-effects direction to `spec`: a new slope on an
+existing term, a new term over an existing grouping, or a new grouping factor — after `cAIC4`'s
+`checkREs` de-duplication (including its hierarchical-order collapse), the structural filters, and
+the *one-direction-larger* restriction. An **empty** result is the terminal/exhausted signal — the
+image of `cAIC4`'s `NULL` return when no admissible enlargement exists. Forward has no `keep` and no
+`allownointercept`: intercept-less enlargements (e.g. a `(slope | newgroup)` term) are admissible.
+
+The enumeration runs on the `cnms` representation `cAIC4` uses (docs/math/0008 §2.1): `spec` is
+lowered to the repeated-name `cnms` form, transformed, and each surviving candidate lifted back to a
+`RESpec`, de-duplicated by the canonical term-multiset encoding.
+
+# Arguments
+- `spec::RESpec` — the structure to enumerate neighbours of.
+- `slopecandidates::Vector{Symbol}` — slope variables eligible to be added.
+- `groupcandidates::Vector{Symbol}` — grouping factors eligible to be added.
+- `maxslopes::Int` — cap on slopes per grouping (`cAIC4` `numberOfPermissibleSlopes`); the combo size
+  is `maxslopes + 1`, the `+1` reserving the intercept slot.
+- `useacross::Bool` — when `true`, existing slopes may migrate to other groupings (`allowUseAcross`).
+- `selectcorrelation::Bool` — when `false` (default), uncorrelated splits are rejected (the same-name
+  filter and `removeUncor`); when `true` they are admissible candidates.
+
+# Returns
+- `Vector{RESpec}` — the de-duplicated forward neighbours; empty at the terminal.
+
+# Example
+```julia
+m = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), sleepstudy)
+forwardcandidates(extract(m); slopecandidates=[:days])   # [RESpec([REGroup(:subj, ["(Intercept)", "days"], true)])]
+```
+"""
+function forwardcandidates(
+    spec::RESpec;
+    slopecandidates::Vector{Symbol}=Symbol[],
+    groupcandidates::Vector{Symbol}=Symbol[],
+    maxslopes::Int=2,
+    useacross::Bool=false,
+    selectcorrelation::Bool=false,
+)
+    maxslopes >= 1 || throw(ArgumentError("maxslopes must be ≥ 1 (got $maxslopes)"))
+    cnms = _cnmsform(spec)
+    cands = _forwardstep(
+        cnms;
+        slopecandidates=String[string(s) for s in slopecandidates],
+        groupcandidates=groupcandidates,
+        nrofcombs=maxslopes + 1,
+        useacross=useacross,
+        selectcorrelation=selectcorrelation,
+    )
+    seen = Set{String}()
+    out = RESpec[]
+    for c in cands
+        isempty(c) && continue
+        k = _canonkey(c)
+        k in seen && continue
+        push!(seen, k)
+        push!(out, _respec(c))
+    end
+    return out
+end
+
+# ── nesting ingredients (docs/math/0008 §3.5) ─────────────────────────────────
+# The data-dependent `expandnesting` glue (column extraction + warn-and-drop) is driver-side and
+# deferred to §4; #39 ships the two pure ingredients below.
+
+"""
+    _allnestsubs(s::AbstractString) -> Vector{String}
+
+The pure string expansion of a nesting expression into its sub-groupings — the port of `cAIC4`'s
+`allNestSubs` (`R/helperfuns_stepcAIC.R:417`). `(1 | a/b)` expands to the grouping factors `b:a`
+(the interaction, innermost-first) and `a` (the outer factor):
+
+```
+_allnestsubs("a/b")   == ["b:a", "a"]
+_allnestsubs("a/b/c") == ["c:b:a", "b:a", "a"]
+```
+"""
+function _allnestsubs(s::AbstractString)
+    parts = strip.(split(s, "/"))
+    any(isempty, parts) && throw(ArgumentError("malformed nesting expression: $(repr(s))"))
+    out = String[]
+    # `findbars(~ (1 | a/b/c))` yields the bars (1|c:b:a), (1|b:a), (1|a): nested interaction terms
+    # of decreasing depth. Their grouping exprs are the reversed-prefix `:`-joins, innermost first.
+    for k in length(parts):-1:1
+        push!(out, join(reverse(parts[1:k]), ":"))
+    end
+    return out
+end
+
+"""
+    isnested(f1, f2) -> Bool
+
+Whether factor `f1` is nested within factor `f2` — the port of `lme4`/`reformulas::isNested`
+(`R/stepcAIC.R:216`). True iff every level of `f1` co-occurs with **at most one** level of `f2`.
+
+# Arguments
+- `f1`, `f2` — equal-length factor vectors (any element type compared by `isequal`).
+
+# Returns
+- `Bool` — `true` when `f1` is nested within `f2`.
+"""
+function isnested(f1::AbstractVector, f2::AbstractVector)
+    length(f1) == length(f2) || throw(
+        ArgumentError(
+            "isnested requires equal-length factors ($(length(f1)) ≠ $(length(f2)))"
+        ),
+    )
+    seen = Dict{Any,Any}()
+    for (a, b) in zip(f1, f2)
+        if haskey(seen, a)
+            isequal(seen[a], b) || return false
+        else
+            seen[a] = b
+        end
+    end
+    return true
 end

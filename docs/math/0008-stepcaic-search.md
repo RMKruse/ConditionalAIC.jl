@@ -294,15 +294,129 @@ This is the §6 Level-1 structure-equality for the backward enumerator; no cAIC 
 
 ## 3. Forward enumeration — `forwardStep` / `makeForward`
 
-Add a new grouping factor (`groupcandidates`) or a new slope (`slopecandidates`) to an existing
-group; `maxslopes` (`numberOfPermissibleSlopes`, +1 for the intercept) caps slopes per group;
-`useacross` (`allowUseAcross`) lets a slope migrate across groups. Candidates are restricted to RE
-structures **exactly one direction larger** than the current one (`R/helperfuns_stepcAIC.R:566–582`),
-then passed through the same `removeUncor`/dedup filters. Nesting candidates (`a/b`) expand via
-`allNestSubs` after an `isNested` check (warn-and-drop if not actually nested).
+`forwardcandidates(spec; slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation)
+-> Vector{RESpec}` is the faithful port of `cAIC4`'s `forwardStep` (`R/helperfuns_stepcAIC.R:516–590`),
+the RE branch of `makeForward` (`:929–968`). It returns the random-effects neighbours **one direction
+larger** than `spec`: each adds a single slope to an existing term, a single new term to an existing
+grouping, or a new grouping factor. It runs on the same `cnms` bridge as backward (§2.1):
+`respec ∘ forwardStep ∘ cnmsform`, de-duplicated by the canonical encoding (§2.5). An **empty**
+`Vector{RESpec}` is the terminal/exhausted signal — the image of `cAIC4`'s `return(NULL)` (`:556`,
+`:584`). Forward has **no** `keep` and **no** `allownointercept` (unlike backward): `forwardStep`
+takes neither, so intercept-less candidates (e.g. `(days|item)` over a new grouping) are admissible.
 
-> *(to fill: the add set, the "one larger" restriction, and the nesting expansion — the Level-1
-> candidate-set equality target for forward.)*
+`maxslopes` is the user-facing cap (`cAIC4` `numberOfPermissibleSlopes`, default `2`); the slope-combo
+size `nrOfCombs = maxslopes + 1` adds the intercept slot, exactly as the driver's redefine
+(`R/stepcAIC.R:302`). The port applies the `+1` internally so `forwardcandidates(spec)` and the R
+`forwardStep(cnms, nrOfCombs = maxslopes + 1)` are compared like-for-like.
+
+### 3.1 The add set (`forwardStep:525–548`)
+
+Let `cnms = cnmsform(spec)`.
+
+- **`allslopes`** — the slope labels eligible to appear in an added combination:
+  - `useacross == false` (default): `[slopecandidates…, "(Intercept)"]` — only the externally supplied
+    slope variables plus the intercept;
+  - `useacross == true`: `unique([unlist(cnms)…, slopecandidates…], incomparables = "(Intercept)")` —
+    every direction already in the model plus the candidates, letting an existing slope migrate to
+    another grouping. *Faithful quirk:* `cAIC4`'s `unique(…, "(Intercept)")` passes `"(Intercept)"`
+    as `incomparables`, so intercept labels are never de-duplicated and may appear several times in
+    `allslopes`; the duplicate single-intercept combos this produces are removed by the combo-dedup
+    (`:543`) and the final candidate dedup (`:553`), so the **set** is unchanged. The port may keep a
+    single intercept (proof of set-equivalence: duplicate intercepts yield only duplicate candidates,
+    all removed downstream).
+- **`allgroups`** — `unique([names(cnms)…, groupcandidates…])`: existing groupings plus the candidates.
+- **`allslopecombs`** — all size-`i` combinations of `allslopes` for `i ∈ 1:nrOfCombs` with
+  `i ≤ length(allslopes)` (`combn`), dropping any combo with a repeated label (`:543`).
+- **cross product (`:545–548`)** — every `(group, combo)` pair (`rep(combs, each = #groups)` named by
+  cycling `allgroups`); each candidate is `append(cnms, (group ↦ combo))`.
+
+### 3.2 `checkREs` **with** `checkHierarchicalOrder` (`:354–384`, `:317–345`)
+
+Each candidate passes through `checkREs`: drop `NULL`/all-`NA` terms; per grouping, sort each
+direction-vector and drop duplicate vectors; **and**, when a grouping keeps `>1` distinct term, apply
+`checkHierarchicalOrder`. The hierarchical step (sort terms by length desc; for each non-minimal term
+`t` with `length(t) > 1` and `length(t) > min-length`, delete every surviving term equal to a *proper
+sub-combination* of `t`, via `allCombn`) collapses a redundant smaller term into a larger one — e.g.
+adding the size-2 combo `{(Intercept), days}` to `(1|item)` yields the two terms `(1|item)` and
+`(1+days|item)`, and `checkHierarchicalOrder` deletes the sub-term `(1|item)`, leaving `(1+days|item)`.
+
+> This is the step the backward port omits: the comment in `src/stepcaic.jl` notes
+> `checkHierarchicalOrder` is unreachable for a backward single-term-per-grouping candidate. Forward
+> reaches it (a size-≥2 combo added to an existing term), so the forward port carries the full
+> `checkREs`. The shared `_checkres` is extended (not forked) to apply the hierarchical step.
+
+### 3.3 Filters and dedup (order load-bearing, `:550–563`)
+
+In exactly this order:
+
+1. **same-grouping reject (`:550–552`, skipped iff `selectcorrelation`)**: keep a candidate only if
+   `length(unique(names)) == length` — i.e. no grouping appears in more than one term. By default a
+   forward step never produces an uncorrelated split; under `selectcorrelation` the split survives
+   (e.g. adding `days` to `(1|subj)` yields both `(1+days|subj)` and `(1|subj)+(0+days|subj)`).
+2. **dedup (`:553`)** and **drop-original (`:554`)**: discard a candidate equal to `lapply(cnms, sort)`
+   (the structure the move was a no-op on — e.g. adding an intercept where one already exists).
+3. **null-drop, order-by-name, ordered-name dedup (`:558–560`)** — as backward (§2.4 step 2).
+4. **`removeUncor` (`:563`, skipped iff `selectcorrelation`)** — as §2.4 step 3.
+
+### 3.4 The one-direction-larger restriction (`:566–582`)
+
+The defining forward constraint. Drop a candidate if **any** of its terms `t` over grouping `g` is
+more than one direction larger than the current model at `g`:
+
+- `g ∉ names(cnms)` (a newly added grouping): drop if `length(t) > 1` — a new grouping enters with a
+  single direction only;
+- `g ∈ names(cnms)` (existing): drop if `length(t) > length(cnms[[g]]) + 1` — an existing term grows
+  by at most one direction.
+
+If no candidate survives, return empty (`:584`).
+
+### 3.5 Nesting expansion — `allNestSubs` + `isNested` (`R/stepcAIC.R:210–223`)
+
+A `groupcandidates` entry written as a nesting expression `"a/b"` expands, **before** `forwardStep`,
+to its sub-groupings. `allNestSubs("a/b")` (`R/helperfuns_stepcAIC.R:417–423`) is the pure string
+expansion via `findbars(~ (1 | a/b))`: `"a/b" ↦ ["b:a", "a"]`, `"a/b/c" ↦ ["c:b:a", "b:a", "a"]` (the
+interaction grouping innermost-first, then the outer factor). Ported as `_allnestsubs(s) ->
+Vector{String}` (pure; Level-1 fixtured against `allNestSubs`).
+
+The validity gate `isNested(data[,a], data[,b])` (`lme4`/`reformulas::isNested`, `R/stepcAIC.R:216`)
+admits the expansion only when the factors are genuinely nested, warn-and-dropping otherwise. Its
+predicate — *every level of `f1` co-occurs with at most one level of `f2`* (`f1` nested within `f2`) —
+is ported as `isnested(f1, f2) -> Bool` over two raw factor vectors (no data-table dependency;
+Level-1 testable against `reformulas::isNested`).
+
+> **Deferred:** the `expandnesting(groupcandidates, data)` glue that pulls `data` columns to run
+> `isnested` + the warn-and-drop loop is **driver-side** (`R/stepcAIC.R:210–223`, *not* `forwardStep`)
+> and forces the `stepcaic`-receives-`data` interface decision. It is deferred to the §4 driver, where
+> that interface is designed; #39 ships the two pure ingredients (`_allnestsubs`, `isnested`).
+
+### 3.6 The Level-1 set-equality oracle
+
+As §2.5: for each `(spec, slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation)`
+scenario, with `C_R = forwardStep(cnms, nrOfCombs = maxslopes + 1, …)` and
+`C_jl = forwardcandidates(spec; …)`:
+
+```
+{ canonical(c) : c ∈ C_R }  ==  { canonical(c) : c ∈ C_jl }        # Set equality, no model fit
+```
+
+Scenarios (observed `cAIC4` outputs), pinned in the forward fixture generator:
+
+| spec | slopes / groups / flags | `cAIC4` candidate set |
+|:-----|:------------------------|:----------------------|
+| `(1\|subj)` | group `item` | `{(1\|item)+(1\|subj)}` |
+| `(1\|subj)` | slope `days` | `{(1+days\|subj)}` |
+| `(1\|subj)` | slope `days`, group `item` | `{(1\|item)+(1\|subj), (days\|item)+(1\|subj), (1+days\|subj)}` |
+| `(1\|subj)` | slope `days`, `selectcorrelation` | `{(1+days\|subj), (1\|subj)+(0+days\|subj)}` |
+| `(1+days\|subj)` | group `item`, `useacross` | `{(1\|item)+(1+days\|subj), (days\|item)+(1+days\|subj)}` |
+| `(1\|subj)+(1\|item)` | slope `days` | `{(1+days\|item)+(1\|subj), (1\|item)+(1+days\|subj)}` |
+| `(1\|subj)` | slopes `x,y,z`, `maxslopes=1` | `{(1+x\|subj), (1+y\|subj), (1+z\|subj)}` |
+| `(1\|subj)` | slopes `x,y`, `maxslopes=2` | `{(1+x\|subj), (1+y\|subj)}` (size-3 combo capped by one-larger) |
+| `(1+days\|subj)` | slope `x` | `{}` (no candidate ≤ one larger without `useacross`) |
+| `(1\|g)` | none | `{}` (terminal) |
+
+This is the §6 Level-1 structure-equality for the forward enumerator; no cAIC value is computed. The
+nesting ingredients carry their own Level-1 fixtures: `_allnestsubs` against `allNestSubs`, `isnested`
+against `reformulas::isNested`.
 
 ## 4. The greedy controller — `stepcAIC` driver (lines 410–659)
 
