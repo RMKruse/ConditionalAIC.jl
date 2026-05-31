@@ -44,11 +44,36 @@ _Avoid_: using "model selection" to mean scoring one model, or conflating Compar
 set) with Search (a generated space).
 
 **Averaging** (model averaging):
-Combining several fitted models into one prediction, *weighted* by their cAIC (lower cAIC → larger
-weight), rather than selecting a single model. `cAIC4`'s `modelAvg` / `predictMA` / `summaryMA`.
-Distinct from Selection: it keeps all the models and blends them. In the parity goal as its own
-milestone **M4.5** (CLAUDE.md §11); outside the near-term scope.
+Combining several fitted models into one prediction, *weighted* rather than selecting a single
+model. `cAIC4`'s `modelAvg` / `predictMA` / `summaryMA` (+ internal `getWeights` / `weightOptim`).
+Distinct from Selection: it keeps all the models and blends them. Its own milestone **M4.5**
+(CLAUDE.md §11). **Scope (resolved 2026-05-31): Gaussian LMM only**, matching `cAIC4` — the optimal
+weight objective is Gaussian by construction (see *Zhang-optimal weights*), and there is no R ground
+truth for a GLMM weight criterion, so GLMM averaging is a deferred non-`cAIC4` extension (parallel to
+how fixed-effects *Search* was scoped out of M4). Candidates may differ in **both** fixed- and
+random-effects structure (unlike *Search*, which holds FE constant); they are combined by
+*model-averaged effects*. They must share one response/dataset and REML setting.
 _Avoid_: conflating with Comparison (which ranks and picks one) or Search.
+
+**Zhang-optimal weights** (the `opt=TRUE` path of `modelAvg`, via `getWeights`):
+The model-averaging weights `w` minimising the Mallows-type criterion of Zhang et al. (2014),
+`(y − μw)ᵀ(y − μw) + 2σ²(w·ρ)`, over the unit simplex (`Σwᵢ = 1`, `0 ≤ wᵢ ≤ 1`), where `μ` stacks
+the candidates' conditional fitted means, `ρ` is the per-candidate effective df, and `σ²` is the
+residual variance of the largest-df candidate. A convex quadratic program. Gaussian-specific (it uses
+`σ²` and a squared-error fit term), which is why *Averaging* is LMM-only.
+_Avoid_: calling these "AIC weights" — those are the *smoothed* weights below.
+
+**Buckland smoothed weights** (the `opt=FALSE` path of `modelAvg`):
+The exponential cAIC weights `wᵢ = exp(−Δᵢ/2) / Σ exp(−Δ/2)` with `Δᵢ = cAICᵢ − min cAIC` (Buckland
+et al. 1997). Need only the candidate cAIC values, not the optimizer. The simple alternative to
+*Zhang-optimal weights*.
+
+**Model-averaged effects** (`modelAvg`'s `fixeff`/`raneff`):
+The weighted combination of candidate coefficients, formed by a **name-keyed** weighted sum: each
+candidate contributes `wᵢ · coefᵢ` to every term it carries, summed across candidates over the union
+of term names (a term absent from a candidate contributes 0), reported name-sorted. Lets candidates
+with different FE/RE structures be combined. The fixed-effects analogue uses coefficient names; the
+random-effects analogue keys on (grouping factor, level, RE term).
 
 **RE-structure spec** (the `cnms` analogue):
 The internal, fit-independent description of a candidate's random-effects structure: each grouping
@@ -143,6 +168,8 @@ removed and the model is refit on the reduced parameter space — the GLMM analo
   `anocaic` — the latter is reserved as our lowercase Julia port name. Earlier drafts had the
   spelling wrong.
 - `cAIC4` also exports a **model-averaging** suite (`modelAvg` / `predictMA` / `summaryMA`),
-  surfaced from its `NAMESPACE`. It is a distinct capability (**Averaging**), out of near-term
-  scope, now folded into the parity goal as milestone **M4.5** (CLAUDE.md §11, amended 2026-05-27;
-  see PARITY.md).
+  surfaced from its `NAMESPACE`. It is a distinct capability (**Averaging**), milestone **M4.5**
+  (CLAUDE.md §11, amended 2026-05-27; see PARITY.md). Scope and design **resolved (grilled
+  2026-05-31)**: Gaussian LMM only; public surface `modelavg`/`predictma`/`summaryma`/`getweights`
+  (`weightoptim` internal); the weight optimizer is a faithful transcription of `cAIC4`'s
+  `solnp`-based augmented-Lagrangian SQP (see [ADR-0007](docs/adr/0007-weight-optimizer-transcription.md)).
