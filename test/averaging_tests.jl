@@ -576,6 +576,150 @@ end
     end
 end
 
+# ── M4.5 issue #54: edge-case hardening ─────────────────────────────────────────────────
+
+@testitem "modelavg M=1 :zhang short-circuit: single model returns weights=[1.0] (Level-2)" tags = [
+    :level2,
+] begin
+    # docs/math/0009 §2.3: a single candidate is the trivially unique minimiser — _getweights_raw
+    # hits the nw==1 branch and returns ŵ=(1), J=(y−μ₁)ᵀ(y−μ₁)+2σ̂²ρ₁, skipping the SQP.
+    # This exercises the full modelavg(:zhang) pipeline with M=1, ensuring the short-circuit
+    # propagates correctly through the scoring, sigma_sq, and effect-averaging steps.
+    using MixedModels
+    using cAIC: modelavg, ModelAvgResult, WeightResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res = modelavg(m1; weights=:zhang)
+
+    @test res isa ModelAvgResult{Float64}
+    @test res.weighttype == :zhang
+    @test length(res.weights) == 1
+    @test res.weights ≈ [1.0]
+    @test sum(res.weights) ≈ 1.0
+
+    # WeightResult is stored; the objective formula (y-μ)ᵀ(y-μ)+2σ²ρ is already validated
+    # at Level-1 (WeightResult tracer test). Here we just verify the result is finite.
+    @test res.weightresult isa WeightResult{Float64}
+    @test isfinite(res.weightresult.objective)
+    @test res.weightresult.objective ≥ 0
+    @test res.weightresult.duration == 0.0
+end
+
+@testitem "modelavg M=1 :smoothed short-circuit: single model returns weights=[1.0] (Level-2)" tags = [
+    :level2,
+] begin
+    # _bucklandweights([c]) = exp(0)/1 = [1.0]: the Δᵢ=0 term gives weight 1 to the sole
+    # candidate regardless of its absolute cAIC value.
+    using MixedModels
+    using cAIC: modelavg, ModelAvgResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res = modelavg(m1; weights=:smoothed)
+
+    @test res isa ModelAvgResult{Float64}
+    @test res.weighttype == :smoothed
+    @test length(res.weights) == 1
+    @test res.weights ≈ [1.0]
+    @test res.weightresult === nothing
+end
+
+@testitem "_weightoptim with negative-definite Hessian emits @warn and returns valid fallback (Level-1)" tags = [
+    :level1,
+] begin
+    # Regression guard for the ill-conditioned fallback paths (averaging.jl). A negative-
+    # definite Hessian with lambda=0 forces cholesky(Symmetric(hess)) to throw PosDefException
+    # on the first LM-ramp step, exercising the @warn + early-return branch. The fallback
+    # must: (a) emit exactly the documented warning, and (b) return a NamedTuple with finite p.
+    using LinearAlgebra, Test
+    using cAIC: cAIC
+
+    T = Float64
+    nw = 2
+    y        = T[1.0, 2.0, 3.0]
+    mu_mat   = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
+    rho_v    = T[2.5, 3.0]
+    sigma_sq = T(1.2)
+    equB     = one(T)
+    lowb     = zeros(T, nw)
+    uppb     = ones(T, nw)
+
+    find_weights = let y = y, mu = mu_mat, σ² = sigma_sq, ρ = rho_v
+        w -> let r = y .- mu * w
+            dot(r, r) + 2 * σ² * dot(ρ, w)
+        end
+    end
+
+    w0       = fill(one(T) / nw, nw)
+    funv     = find_weights(w0)
+    eqv      = sum(w0) - equB                   # = 0.0 (feasible start)
+    tol      = T(1e-8)
+    sc1      = min(max(abs(funv), tol), one(T) / tol)
+    sc2      = min(max(abs(eqv), tol), one(T) / tol)
+    scaler   = vcat(T[sc1, sc2], ones(T, nw))
+
+    # Negative-definite Hessian: cholesky(Symmetric(-I + 0·D)) throws immediately
+    hess_nd = -Matrix{T}(I, nw, nw)
+
+    res = @test_logs (:warn, r"Cholesky decomposition failed") cAIC._weightoptim(
+        w0, zero(T), T[funv, eqv], hess_nd, zero(T), scaler, find_weights, equB, lowb, uppb
+    )
+    @test length(res.p) == nw
+    @test all(isfinite, res.p)
+end
+
+@testitem "_bucklandweights with uniform cAIC gives uniform weights (Level-1)" tags = [:level1] begin
+    # When all candidates carry the same cAIC, Δᵢ=0 for every i, so wᵢ=1/M (maximum
+    # entropy). The log-space computation must not introduce rounding asymmetries.
+    using cAIC: cAIC
+
+    for M in (2, 3, 5)
+        w = cAIC._bucklandweights(fill(42.7, M))
+        @test length(w) == M
+        @test w ≈ fill(1.0 / M, M)
+        @test sum(w) ≈ 1.0
+    end
+end
+
+@testitem "_getweights_raw with all-zero rho: penalty vanishes, returns valid WeightResult (Level-1)" tags = [
+    :level1,
+] begin
+    # When every ρᵢ=0, the penalty 2σ²(ρᵀw)=0 regardless of w and the Mallows criterion
+    # reduces to pure RSS minimisation. The optimizer must still converge to a weight vector
+    # on the unit simplex (non-negative, sum=1) with a finite, non-negative objective.
+    using cAIC: cAIC
+
+    T   = Float64
+    y   = T[1.0, 2.0, 3.0]
+    mu  = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
+    rho = zeros(T, 2)           # all-zero effective-df: penalty term drops out
+    sigma_sq = T(1.2)
+
+    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+
+    @test res isa cAIC.WeightResult{T}
+    @test length(res.weights) == 2
+    @test all(≥(-1e-10), res.weights)
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+    @test isfinite(res.objective)
+    @test res.objective ≥ 0
+end
+
 @testitem "live R re-validation of the modelavg Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin
