@@ -173,7 +173,9 @@ end
     # and — crucially — the search does NOT descend to the `lm` terminal (the keep floor is the
     # smallest reachable model). cAIC4's decision: select `(1 | batch)` and stop (keep-minimal).
     # Provenance: fixture pastes_keepbatch/finalformula = "strength ~ (1 | batch)", keep "~(1 | batch)".
-    keep = RESpec([REGroup(:batch, ["(Intercept)"], true)])
+    # `keep` is supplied as a `FormulaTerm` RE fragment (the `cAIC4` `keep$random` analogue),
+    # parsed to a `RESpec` floor against `data`.
+    keep = @formula(strength ~ (1 | batch))
     res = stepcaic(m, data; direction=:backward, keep=keep)
 
     @test extract(res.model) == RESpec([REGroup(:batch, ["(Intercept)"], true)])
@@ -593,4 +595,95 @@ end
     @test termcand.spec === nothing
     @test termcand.dof == caic(lm(@formula(strength ~ 1), data)).dof
     @test termcand.dof == 2
+end
+
+@testitem "stepcaic skipnonconverged is inert when every candidate converges (Pastes)" begin
+    using MixedModels
+    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+
+    data = MixedModels.dataset(:pastes)
+    m = fit(
+        MixedModel,
+        @formula(strength ~ 1 + (1 | batch) + (1 | cask)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    # All backward candidates of the crossed model converge, so dropping non-converged ones is a
+    # no-op: the `skipnonconverged = true` run must match the default `false` run exactly.
+    base = stepcaic(m, data; direction=:backward, savedmodels=2)
+    skip = stepcaic(m, data; direction=:backward, savedmodels=2, skipnonconverged=true)
+
+    @test extract(skip.model) == extract(base.model)
+    @test skip.selected.caic == base.selected.caic
+    @test length(skip.path) == length(base.path)
+    @test [s.caic for s in skip.saved] == [s.caic for s in base.saved]
+    @test skip.options.skipnonconverged === true
+    @test base.options.skipnonconverged === false
+end
+
+@testitem "stepcaic skipnonconverged excludes a non-converged candidate (selection + saved)" begin
+    using MixedModels
+    using GLM: lm, StatsModels
+    using cAIC: caic, extract, render, RESpec, REGroup, backwardcandidates, StepcaicOptions
+    # The driver is exercised directly: no public `stepcaic` knob can deterministically force a
+    # *candidate refit* to report non-convergence, so the test injects a refit closure that taints
+    # one candidate's optimizer return code. Everything else (greedy walk, `converged`, scoring) is
+    # the real machinery — this isolates the `skipnonconverged` exclusion branch.
+    using cAIC: _runstepcaic, MMInternals
+
+    data = MixedModels.dataset(:pastes)
+    m = fit(
+        MixedModel,
+        @formula(strength ~ 1 + (1 | batch) + (1 | cask)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    batchspec = RESpec([REGroup(:batch, ["(Intercept)"], true)])
+    BATCH_CAIC = 301.4828311   # the lower-cAIC drop — the global minimum, would win if included
+
+    fixed = MMInternals.fixedterm(m)
+    lhs = MMInternals.responseterm(m)
+    score(model) = caic(model)
+    # Refit each candidate normally, but force the `(1|batch)` drop to look non-converged.
+    function tainted_refit(c)
+        cm = fit(MixedModel, render(c, fixed, lhs), data; REML=false, progress=false)
+        extract(cm) == batchspec && (cm.optsum.returnvalue = :MAXEVAL_REACHED)
+        return cm
+    end
+    terminalfit() = (tm=lm(StatsModels.FormulaTerm(lhs, fixed), data); (tm, caic(tm)))
+    gencands(spec, _) = backwardcandidates(
+        spec; keep=nothing, selectcorrelation=false, allownointercept=false
+    )
+
+    # savedmodels = 0 keeps all distinct scored models; the rest are a plain backward run.
+    opts(skip) =
+        StepcaicOptions(:backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false)
+
+    noskip = _runstepcaic(
+        Float64, m, score, tainted_refit, terminalfit, gencands, opts(false); keep=nothing
+    )
+    skip = _runstepcaic(
+        Float64, m, score, tainted_refit, terminalfit, gencands, opts(true); keep=nothing
+    )
+
+    # Without the flag the non-converged `(1|batch)` is still scored and, being the global minimum,
+    # is selected.
+    @test extract(noskip.model) == batchspec
+    @test noskip.selected.caic ≈ BATCH_CAIC atol = 1e-3
+    @test any(s -> isapprox(s.caic, BATCH_CAIC; atol=1e-3), noskip.saved)
+
+    # With the flag the non-converged `(1|batch)` is excluded from the comparison: it never wins, so
+    # the global-minimum drop is passed over. The next-best drop `(1|cask)` does not beat the crossed
+    # incumbent, so the search keeps the incumbent — and `(1|batch)` is absent from the saved k-best.
+    @test extract(skip.model) == extract(m)
+    @test skip.selected.caic == caic(m).caic
+    @test !any(s -> isapprox(s.caic, BATCH_CAIC; atol=1e-3), skip.saved)
+
+    # In the first step its effective cAIC is +Inf (the `NA` analogue the greedy rule never picks).
+    batchcand = only(filter(c -> c.spec == batchspec, skip.path[1].candidates))
+    @test batchcand.caic == typemax(Float64)
 end

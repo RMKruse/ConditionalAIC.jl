@@ -109,3 +109,41 @@ end
         empty, cAIC.MMInternals.fixedterm(m), cAIC.MMInternals.responseterm(m)
     )
 end
+
+@testitem "extractkeep parses a keep formula fragment into a RESpec floor" begin
+    using cAIC
+    using MixedModels
+
+    data = MixedModels.dataset(:sleepstudy)
+
+    # Correlated slope+intercept; the response and any fixed terms are ignored.
+    spec = cAIC.extractkeep(@formula(reaction ~ 1 + days + (1 + days | subj)), data)
+    @test spec isa cAIC.RESpec
+    g = only(spec.groups)
+    @test g.grouping === :subj
+    @test g.directions == ["(Intercept)", "days"]
+    @test g.correlated === true
+
+    # An uncorrelated (`zerocorr`) bar parses to a `correlated = false` group.
+    specz = cAIC.extractkeep(@formula(reaction ~ zerocorr(1 + days | subj)), data)
+    @test only(specz.groups).correlated === false
+end
+
+@testitem "extractkeep parses a crossed keep fragment, pinning only the named groupings" begin
+    using cAIC
+    using MixedModels
+
+    data = MixedModels.dataset(:pastes)
+    spec = cAIC.extractkeep(@formula(strength ~ (1 | batch)), data)
+    @test length(spec.groups) == 1
+    @test only(spec.groups).grouping === :batch
+    @test only(spec.groups).directions == ["(Intercept)"]
+end
+
+@testitem "extractkeep rejects a keep formula with no random-effects term" begin
+    using cAIC
+    using MixedModels
+
+    data = MixedModels.dataset(:sleepstudy)
+    @test_throws ArgumentError cAIC.extractkeep(@formula(reaction ~ 1 + days), data)
+end

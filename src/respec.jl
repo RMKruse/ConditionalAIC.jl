@@ -79,6 +79,33 @@ function extract(m::MixedModel)
 end
 
 """
+    extractkeep(keep::FormulaTerm, data) -> RESpec
+
+Parse a `keep` formula fragment into the [`RESpec`](@ref) floor the backward [`stepcaic`](@ref)
+search must not drop below — the Julia analogue of `cAIC4`'s `keep\$random` (`interpret.random`).
+`keep` is a `FormulaTerm` whose right-hand side carries the random-effects bars to pin (e.g.
+`@formula(y ~ (1 | batch))`); its response and any fixed-effects terms are ignored. The bars are
+schema-applied against `data` (through the [`cAIC.MMInternals`](@ref) quarantine) and wrapped into
+[`REGroup`](@ref)s, exactly as [`extract`](@ref cAIC.extract) does for a fitted model.
+
+# Throws
+- `ArgumentError` if `keep` carries no random-effects term — a `keep` floor with nothing to pin is
+  a usage error (pass `keep=nothing` for no floor).
+"""
+function extractkeep(keep, data)
+    groups = REGroup[
+        REGroup(grouping, directions, correlated) for
+        (grouping, directions, correlated) in MMInternals.reterminfo(keep, data)
+    ]
+    isempty(groups) && throw(
+        ArgumentError(
+            "keep formula carries no random-effects term to pin; pass keep=nothing for no floor",
+        ),
+    )
+    return RESpec(groups)
+end
+
+"""
     render(spec::RESpec, fixed, lhs) -> FormulaTerm
 
 Rebuild a model formula from a [`RESpec`](@ref) — the `cAIC4` `cnmsConverter` + `makeFormula`

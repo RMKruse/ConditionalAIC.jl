@@ -6,6 +6,41 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — `stepcaic` `skipnonconverged`: convergence signal is the optimizer return code, not `lme4`'s gradient/Hessian check; no Level-2 fixture
+
+**Status:** accepted (design — #43). Milestone M4; option `skipnonconverged` (the `cAIC4`
+`calcNonOptimMod` analogue, default `false` ⇒ include non-converged, matching
+`calcNonOptimMod=TRUE`).
+
+`cAIC4`'s `calculateAllCAICs` excludes a candidate from the comparison (returns an `NA` cAIC)
+when `calcNonOptimMod=FALSE` **and** the fit raised a convergence code — `lme4`'s
+`m@optinfo$conv$lme4$code`, a *rich* post-hoc check (scaled gradient norm + Hessian
+positive-definiteness against tolerances). `MixedModels.jl` exposes no such check; the only
+convergence signal it carries is the **optimizer return code** `m.optsum.returnvalue`.
+`cAIC.jl` therefore defines `converged(m) := returnvalue ∉ {:FAILURE, :INVALID_ARGS,
+:OUT_OF_MEMORY, :FORCED_STOP, :MAXEVAL_REACHED, :MAXTIME_REACHED}` (mirroring `MixedModels`'
+own `_NLOPT_FAILURE_MODES`), and `skipnonconverged=true` gives a non-converged candidate an
+effective cAIC of `+Inf` (the `NA`-for-comparison analogue) and drops it from the
+`savedmodels` k-best.
+
+**The divergence.** The two ecosystems will flag *different* candidates as non-converged:
+`lme4` can flag a numerically-optimal fit whose gradient check trips its tolerance, while
+`MixedModels` reports success; conversely a fit that exhausts `MixedModels`' evaluation budget
+(`:MAXEVAL_REACHED`) need not raise an `lme4` code. The *selection mechanism* is identical
+(exclude-from-comparison); the *set of excluded candidates* is not guaranteed to match. A
+singular fit is **not** treated as non-converged (it is a first-class supported case, CLAUDE.md
+§9; `MixedModels` returns a success code with `λ` on the boundary).
+
+**Validation consequence.** Because deterministic non-convergence is not reproducible *identically*
+across optimizers, there is **no Level-2 `cAIC4` fixture** for this flag. It is validated by (1) a
+unit test of `converged` (a converged fit ⇒ `true`; an evaluation-budget-truncated fit ⇒ `false`),
+(2) an inert-case test (when every candidate converges, `skipnonconverged=true` reproduces the
+default run exactly), and (3) a mechanism test driving the real greedy controller with one candidate
+whose return code is tainted to a failure mode — asserting it is excluded from both the selection and
+the saved set. See `docs/math/0008-stepcaic-search.md` §5.
+
+---
+
 ## 2026-05-31 — GLMM `stepcaic` backward-to-`glm`-terminal scenario: per-scenario Level-2 band (`atol = 1e-2`), measured
 
 **What this records.** The `glmm_poisson_terminal` driver scenario (`stepcaic_driver_level2.h5`, #42)

@@ -18,6 +18,7 @@ first.
 | Touchpoint        | Kind        | Used by             | Extracted quantity                                       |
 |:------------------|:------------|:--------------------|:---------------------------------------------------------|
 | `m.optsum.REML`   | field       | [`reml`]            | REML flag (`Bool`); which objective was fitted           |
+| `m.optsum.returnvalue` | field  | [`converged`]       | optimizer return code (`Symbol`); non-converged when in the failure modes |
 | `m.sigma`         | property    | [`sigmahat`]        | residual standard deviation σ̂                            |
 | `ranef(m)`        | exported fn | [`bhat`]            | predicted random effects b̂ = λu, per grouping            |
 | `m.X`             | field       | [`fixedeffects`]    | n×p fixed-effects design X                                |
@@ -58,6 +59,7 @@ first.
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
 | `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (M4 RE-structure read) |
+| `MixedModels.schematize(f, data, contrasts)` | unexported fn | [`reterminfo`] | apply the model schema to a `keep` formula fragment so its `|` bars become RE terms |
 | `m.formula.lhs`   | field       | [`responseterm`]    | formula response term; the `lhs` of the rendered candidate formula             |
 | `RandomEffectsTerm` (`.lhs`/`.rhs`) | type/fields | [`reterminfo`] | a correlated RE term: `.lhs` directions `MatrixTerm`, `.rhs` grouping `CategoricalTerm` |
 | `MixedModels.ZeroCorr` (`.term`) | type/field | [`reterminfo`] | an uncorrelated `zerocorr` term; unwrapped to its inner `RandomEffectsTerm` |
@@ -131,6 +133,41 @@ function reml(m::LinearMixedModel)
     flag = m.optsum.REML
     flag isa Bool || _drift("m.optsum.REML", Bool, flag)
     return flag
+end
+
+# The optimizer return codes that signal a failed (non-converged) fit, mirroring
+# `MixedModels`' own `_NLOPT_FAILURE_MODES` (the NLopt backend's failure classification). A
+# return value outside this set — `:FTOL_REACHED`, `:XTOL_REACHED`, `:SUCCESS`,
+# `:STOPVAL_REACHED`, the tolerance-reached successes, and the soft `:ROUNDOFF_LIMITED` — is a
+# converged fit. Held locally (not imported from the unexported backend constant) so the
+# convergence test does not reach past the documented touchpoint.
+const _NONCONVERGED_RETURNS = (
+    :FAILURE,
+    :INVALID_ARGS,
+    :OUT_OF_MEMORY,
+    :FORCED_STOP,
+    :MAXEVAL_REACHED,
+    :MAXTIME_REACHED,
+)
+
+"""
+    converged(m::MixedModel) -> Bool
+
+Whether the model's variance-parameter optimization converged (`m.optsum.returnvalue` is not
+one of the optimizer failure codes). The convergence signal `stepcaic`'s `skipnonconverged`
+option (the `cAIC4` `calcNonOptimMod` analogue) tests to exclude a non-converged candidate from
+the comparison.
+
+`lme4` flags non-convergence with a richer gradient/Hessian check (its `optinfo` convergence
+code);
+`MixedModels.jl` exposes only the optimizer return code, so this is the faithful analogue
+available — a documented divergence (DECISIONS.md). Works for both `LinearMixedModel` and
+`GeneralizedLinearMixedModel` (each carries its own `optsum`).
+"""
+function converged(m::MixedModel)
+    ret = m.optsum.returnvalue
+    ret isa Symbol || _drift("m.optsum.returnvalue", Symbol, ret)
+    return !(ret in _NONCONVERGED_RETURNS)
 end
 
 """
@@ -828,6 +865,31 @@ the wrapping into `RESpec`/`REGroup` is fit-independent and lives outside the qu
 function reterminfo(m::MixedModel)
     rhs = m.formula.rhs
     rhs isa Tuple || _drift("m.formula.rhs", "Tuple", rhs)
+    return _reterminfo(rhs)
+end
+
+"""
+    reterminfo(keep::FormulaTerm, data) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of a **schema-less** `keep` formula fragment (the `cAIC4`
+`keep\$random` analogue) into the same `(grouping, directions, correlated)` tuples as the model
+method. `keep` is first run through `MixedModels.schematize(keep, data, …)` — the same schema
+application `fit(MixedModel, …)` uses — so its `|` `FunctionTerm` bars become the
+`RandomEffectsTerm`/`ZeroCorr` terms `reterminfo` reads. The formula's left-hand side and any
+fixed-effects terms are ignored; only the RE structure is extracted.
+"""
+function reterminfo(keep::SM.FormulaTerm, data)
+    sf = MixedModels.schematize(keep, data, Dict{Symbol,Any}())
+    # A fixed-only RHS schematizes to a bare `MatrixTerm` (not a tuple); normalise so the
+    # no-random-effects case flows to an empty info list (and `extractkeep`'s `ArgumentError`).
+    rhs = sf.rhs isa Tuple ? sf.rhs : (sf.rhs,)
+    return _reterminfo(rhs)
+end
+
+# Shared RE-term reader for both `reterminfo` methods: walk a schema-applied formula RHS tuple,
+# skip the fixed-effects `MatrixTerm`, and read each `RandomEffectsTerm`/`ZeroCorr` into a
+# `(grouping, directions, correlated)` tuple.
+function _reterminfo(rhs::Tuple)
     info = Tuple{Symbol,Vector{String},Bool}[]
     for t in rhs
         if t isa SM.MatrixTerm
@@ -837,7 +899,7 @@ function reterminfo(m::MixedModel)
         elseif t isa RandomEffectsTerm
             push!(info, _reterm_entry(t, true))
         else
-            _drift("m.formula.rhs element", "MatrixTerm/RandomEffectsTerm/ZeroCorr", t)
+            _drift("formula RHS element", "MatrixTerm/RandomEffectsTerm/ZeroCorr", t)
         end
     end
     return info

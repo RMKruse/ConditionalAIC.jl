@@ -661,8 +661,9 @@ end
 The resolved [`stepcaic`](@ref) options retained for provenance (`cAIC4`'s call record analogue).
 The forward / `both` enumeration options (`groupcandidates`, `slopecandidates`, `maxslopes`,
 `useacross`) carry the forward arc's resolved settings (M4 §5.1); they are empty/defaulted for a
-pure backward run. `keep` is not retained here — it is a [`RESpec`](@ref) floor threaded into the
-backward enumeration, not a scalar provenance field.
+pure backward run. `skipnonconverged` records whether non-converged candidates were excluded from
+the comparison (the `cAIC4` `calcNonOptimMod` analogue). `keep` is not retained here — it is a
+[`RESpec`](@ref) floor threaded into the backward enumeration, not a scalar provenance field.
 """
 struct StepcaicOptions
     direction::Symbol
@@ -670,6 +671,7 @@ struct StepcaicOptions
     allownointercept::Bool
     steps::Int
     savedmodels::Int
+    skipnonconverged::Bool
     groupcandidates::Vector{Symbol}
     slopecandidates::Vector{Symbol}
     maxslopes::Int
@@ -790,7 +792,9 @@ Every candidate is scored with the **same** forwarded scoring kwargs (`method`/`
 - `groupcandidates`, `slopecandidates`, `maxslopes`, `useacross`: the forward enumeration inputs
   (see [`forwardcandidates`](@ref)); ignored for a backward run. A forward/`both` run requires at
   least one of `slopecandidates`/`groupcandidates` (or `useacross`), else `ArgumentError`.
-- `keep`: a [`RESpec`](@ref) floor forwarded to `backwardcandidates`; `nothing` for no floor.
+- `keep`: a `FormulaTerm` RE fragment (e.g. `@formula(y ~ (1 | g))`) parsed against `data` to the
+  [`RESpec`](@ref) floor the backward search must not drop below (the `cAIC4` `keep` analogue);
+  `nothing` for no floor. The formula's response and fixed-effects terms are ignored.
 - `selectcorrelation`, `allownointercept`: the enumeration flags (see `backwardcandidates`).
 - `steps`: the maximum number of search iterations (`cAIC4`'s `steps`, default `50`).
 - `savedmodels`: how many of the best distinct scored models to retain in `result.saved`
@@ -820,11 +824,12 @@ function stepcaic(
     slopecandidates::Vector{Symbol}=Symbol[],
     maxslopes::Int=2,
     useacross::Bool=false,
-    keep::Union{Nothing,RESpec}=nothing,
+    keep::Union{Nothing,_StatsModels.FormulaTerm}=nothing,
     selectcorrelation::Bool=false,
     allownointercept::Bool=false,
     steps::Int=50,
     savedmodels::Int=1,
+    skipnonconverged::Bool=false,
     method::Symbol=:auto,
     hessian::Symbol=:analytic,
     nboot::Union{Int,Nothing}=nothing,
@@ -834,6 +839,8 @@ function stepcaic(
     _validatestepcaic(
         direction, savedmodels, slopecandidates, groupcandidates, maxslopes, useacross
     )
+    # Parse the `keep` formula fragment to the `RESpec` floor threaded into the backward search.
+    keepspec = keep === nothing ? nothing : extractkeep(keep, data)
 
     # Quarantined formula parts + REML flag; candidates are refit with the input's objective.
     fixed = MMInternals.fixedterm(m)
@@ -855,7 +862,7 @@ function stepcaic(
                 selectcorrelation,
             )
         else
-            backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+            backwardcandidates(spec; keep=keepspec, selectcorrelation, allownointercept)
         end
 
     options = StepcaicOptions(
@@ -864,12 +871,15 @@ function stepcaic(
         allownointercept,
         steps,
         savedmodels,
+        skipnonconverged,
         groupcandidates,
         slopecandidates,
         maxslopes,
         useacross,
     )
-    return _runstepcaic(T, m, score, refitcand, terminalfit, gencands, options; keep)
+    return _runstepcaic(
+        T, m, score, refitcand, terminalfit, gencands, options; keep=keepspec
+    )
 end
 
 # Flip the working direction (`R/stepcAIC.R`'s `ifelse(direction=="forward","backward","forward")`).
@@ -906,6 +916,7 @@ function _runstepcaic(
     keep::Union{Nothing,RESpec},
 ) where {T,M<:MixedModel,F,G,H,C}
     savedmodels = options.savedmodels
+    skipnonconverged = options.skipnonconverged
     dirwasboth = options.direction === :both
     # Working direction: `both`/`forward` start forward (`:389`); `backward` is the §4.1 skeleton.
     workdir = options.direction in (:both, :forward) ? :forward : :backward
@@ -1025,8 +1036,12 @@ function _runstepcaic(
             r = score(cm)
             models[i] = cm
             results[i] = r
-            caics[i] = r.caic
-            remember!(_savedkey(c), r)
+            # `skipnonconverged` (the `calcNonOptimMod` analogue): a non-converged candidate is
+            # excluded from the comparison — its effective cAIC is +Inf (the `NA` cAIC analogue,
+            # never the argmin) and it is not retained in the `savedmodels` k-best.
+            excluded = skipnonconverged && !MMInternals.converged(cm)
+            caics[i] = excluded ? typemax(T) : r.caic
+            excluded || remember!(_savedkey(c), r)
         end
 
         bestidx = argmin(caics)
@@ -1144,11 +1159,12 @@ function stepcaic(
     slopecandidates::Vector{Symbol}=Symbol[],
     maxslopes::Int=2,
     useacross::Bool=false,
-    keep::Union{Nothing,RESpec}=nothing,
+    keep::Union{Nothing,_StatsModels.FormulaTerm}=nothing,
     selectcorrelation::Bool=false,
     allownointercept::Bool=false,
     steps::Int=50,
     savedmodels::Int=1,
+    skipnonconverged::Bool=false,
     method::Symbol=:auto,
     nboot::Union{Int,Nothing}=nothing,
     rng::AbstractRNG=default_rng(),
@@ -1156,6 +1172,8 @@ function stepcaic(
     _validatestepcaic(
         direction, savedmodels, slopecandidates, groupcandidates, maxslopes, useacross
     )
+    # Parse the `keep` formula fragment to the `RESpec` floor threaded into the backward search.
+    keepspec = keep === nothing ? nothing : extractkeep(keep, data)
 
     # Quarantined formula parts + the GLM distribution family; candidates refit with that family.
     # The prior weights (binomial denominators nᵢ; empty for Poisson/Bernoulli) are reused on every
@@ -1185,7 +1203,7 @@ function stepcaic(
                 selectcorrelation,
             )
         else
-            backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+            backwardcandidates(spec; keep=keepspec, selectcorrelation, allownointercept)
         end
 
     options = StepcaicOptions(
@@ -1194,10 +1212,13 @@ function stepcaic(
         allownointercept,
         steps,
         savedmodels,
+        skipnonconverged,
         groupcandidates,
         slopecandidates,
         maxslopes,
         useacross,
     )
-    return _runstepcaic(T, m, score, refitcand, terminalfit, gencands, options; keep)
+    return _runstepcaic(
+        T, m, score, refitcand, terminalfit, gencands, options; keep=keepspec
+    )
 end
