@@ -1,13 +1,19 @@
-# The model-averaging assembly (the `modelavg` method). Included directly into the `cAIC`
-# module. Port of `cAIC4`'s `modelAvg` restricted to Gaussian `LinearMixedModel` candidates
-# (docs/math/0009-model-averaging.md): score each candidate with `caic`, form the weights,
-# and combine the candidates' coefficients into name-keyed model-averaged effects.
+# The model-averaging assembly (`modelavg` + `getweights`). Included directly into the
+# `cAIC` module. Port of `cAIC4`'s `modelAvg` / `getWeights` restricted to Gaussian
+# `LinearMixedModel` candidates (docs/math/0009-model-averaging.md).
 #
-# This file touches only the public `MixedModels`/StatsAPI surface (`response`, `fixef`,
-# `fixefnames`, `raneftables`) plus the in-package `MMInternals.reml` and `Numerics`; it
-# does not reach into a `MixedModels` object's internal fields (mm_internals.jl unchanged).
+# Public surface:
+#   modelavg   — score + weight + combine (Buckland :smoothed or Zhang :zhang)
+#   getweights — Zhang-optimal weight optimizer (port of getWeights/.weightOptim)
+#
+# This file touches the public `MixedModels`/StatsAPI surface (`response`, `fixef`,
+# `fixefnames`, `raneftables`) plus `MMInternals.reml`, `MMInternals.conditionalmean`,
+# `MMInternals.sigmahat`, and `Numerics`. It does not access `MixedModels` internal
+# fields directly.
 
-const _WEIGHTTYPES = (:smoothed,)
+using LinearAlgebra: Diagonal, I, Symmetric, cholesky, diag, dot, inv
+
+const _WEIGHTTYPES = (:smoothed, :zhang)
 
 """
     modelavg(m1::LinearMixedModel{T}, rest::LinearMixedModel{T}...; weights=:smoothed,
@@ -71,20 +77,31 @@ function modelavg(
     _validate_candidates(ms)
     weights in _WEIGHTTYPES || throw(
         ArgumentError(
-            "unknown weights=:$weights; supported: :smoothed (Buckland smoothed weights). " *
-            "The Zhang-optimal path is a separate milestone step and is not yet implemented.",
+            "unknown weights=:$weights; supported: :smoothed (Buckland) and :zhang (Zhang-optimal).",
         ),
     )
 
-    # Per-candidate cAIC in INPUT order (the unsorted anocAIC analogue, docs/math/0009 §0).
+    # Per-candidate scoring in INPUT order (the unsorted anocAIC analogue, docs/math/0009 §0).
     n = length(ms)
+    caic_results = Vector{CAICResult{T,LinearMixedModel{T}}}(undef, n)
     caics = Vector{T}(undef, n)
     for (i, m) in enumerate(ms)
-        caics[i] =
-            caic(m; method=method, hessian=hessian, nboot=nboot, sigmapenalty=sigmapenalty).caic
+        r = caic(m; method=method, hessian=hessian, nboot=nboot, sigmapenalty=sigmapenalty)
+        caic_results[i] = r
+        caics[i] = r.caic
     end
 
-    w = _bucklandweights(caics)
+    if weights == :smoothed
+        w = _bucklandweights(caics)
+    else  # :zhang
+        rho = T[r.dof for r in caic_results]
+        i_max = argmax(rho)
+        sigma_sq = MMInternals.sigmahat(ms[i_max])^2
+        mu = hcat(MMInternals.conditionalmean.(ms)...)
+        y_vec = collect(response(ms[1]))
+        wr = _getweights_raw(y_vec, mu, rho, sigma_sq)
+        w = wr.weights
+    end
     fixeff = _avgfixeff(ms, w)
     raneff = _avgraneff(ms, w)
     return ModelAvgResult{T}(
@@ -187,4 +204,492 @@ function _avgraneff(ms, w::AbstractVector{T}) where {T}
     ks = sort!(collect(keys(acc)))
     vs = T[acc[k] for k in ks]
     return NamedEffects{Tuple{String,String,String},T}(ks, vs)
+end
+
+# ── Zhang-optimal weight optimizer (docs/math/0009 §1–2, ADR-0007) ──────────────────
+
+"""
+    getweights(res::ModelAvgResult{T}) -> WeightResult{T}
+
+Zhang-optimal weight optimization for a set of Gaussian `LinearMixedModel` candidates
+(port of `cAIC4`'s `getWeights`). Minimises the Mallows-type criterion
+
+```math
+J(w) = (y - \\mu w)^{\\!\\top}(y - \\mu w) + 2\\hat\\sigma^2(\\rho^{\\!\\top} w)
+```
+
+over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
+Lagrangian SQP of `cAIC4`'s `.weightOptim` (ADR-0007; docs/math/0009 §2).
+
+`σ̂²` is taken from the candidate with the largest effective df (full-precision ρᵢ from
+`caic`; cf. cAIC4's `which.max(modelcAIC\$df)`, docs/math/0009 §6.1).
+
+# Arguments
+- `res`: a [`ModelAvgResult`](@ref) (from [`modelavg`](@ref)). The candidate models,
+  response, and cAIC scoring are re-used; no new model fitting is performed.
+
+# Returns
+- A [`WeightResult`](@ref) with the optimal `weights`, the minimised `objective` J(ŵ),
+  and the wall-clock `duration` (seconds).
+
+# Example
+```jldoctest
+julia> using MixedModels, cAIC
+
+julia> data = MixedModels.dataset(:sleepstudy);
+
+julia> m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false);
+
+julia> m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false);
+
+julia> res = modelavg(m1, m2; weights=:smoothed);
+
+julia> wr = getweights(res);
+
+julia> sum(wr.weights) ≈ 1.0
+true
+```
+"""
+function getweights(res::ModelAvgResult{T}) where {T}
+    ms = res.models
+    # Re-score with caic to get full-precision ρ (docs/math/0009 §6.1: not rounded).
+    caic_results = [caic(m) for m in ms]
+    rho = T[r.dof for r in caic_results]
+    i_max = argmax(rho)
+    sigma_sq = MMInternals.sigmahat(ms[i_max])^2
+    mu = hcat(MMInternals.conditionalmean.(ms)...)
+    y_vec = collect(response(ms[1]))
+    return _getweights_raw(y_vec, mu, rho, sigma_sq)
+end
+
+# Pure optimizer — the getWeights body with model-fitting bypassed (Level-1 testable).
+# Transcribes getWeights.R lines 62-122 (initialization + outer loop) using the supplied
+# (y, mu, rho, sigma_sq). Variable names shadow R where possible (ADR-0007 decision 1).
+function _getweights_raw(
+    y::Vector{T}, mu::Matrix{T}, rho::Vector{T}, sigma_sq::T
+) where {T<:AbstractFloat}
+    nw = length(rho)
+    equB = one(T)
+    lowb = zeros(T, nw)
+    uppb = ones(T, nw)
+
+    # M=1 degenerate case (docs/math/0009 §2.3): ŵ = (1), short-circuit the optimizer.
+    if nw == 1
+        resid = y - mu[:, 1]
+        J = T(dot(resid, resid)) + 2 * sigma_sq * rho[1]
+        return WeightResult{T}(ones(T, 1), J, 0.0)
+    end
+
+    # R: find_weights <- function(w){ t(y - mu %*% w) %*% (y - mu %*% w) + 2*varDF*(w %*% df) }
+    find_weights = let y = y, mu = mu, sigma_sq = sigma_sq, rho = rho
+        function (w::Vector{T}) where {T}
+            resid = y - mu * w
+            return T(dot(resid, resid)) + 2 * sigma_sq * T(dot(rho, w))
+        end
+    end
+
+    # Initialization (getWeights.R lines 62-85)
+    p = fill(one(T) / nw, nw)    # R: weights <- rep(1/M, M); p <- c(weights)
+    funv = find_weights(p)
+    eqv = sum(p) - equB
+    maxit = 400
+    tol = T(1e-8)
+    j = funv                      # R: j <- jh <- funv
+    lambda = zero(T)                   # R: lambda <- c(0) (Lagrange multiplier)
+    hess = Matrix{T}(I, nw, nw)      # R: hess <- diag(nw)
+    mue = T(nw)                     # R: mue <- nw (augmented-Lagrangian penalty)
+    iters = 0
+    targets = T[funv, eqv]
+
+    t0 = time_ns()
+    while iters < maxit
+        iters += 1
+        # Build scaler (getWeights.R lines 88-91)
+        sc1 = min(max(abs(targets[1]), tol), one(T) / tol)
+        sc2 = min(max(abs(targets[2]), tol), one(T) / tol)
+        scaler = vcat(T[sc1, sc2], ones(T, nw))
+
+        res = _weightoptim(
+            p, lambda, targets, hess, mue, scaler, find_weights, equB, lowb, uppb
+        )
+        p = res.p
+        lambda = res.y
+        hess = res.hess
+        mue = res.lambda
+
+        funv = find_weights(p)
+        eqv = sum(p) - equB
+        targets = T[funv, eqv]
+
+        tt = (j - targets[1]) / max(targets[1], one(T))   # R: tt <- (j - targets[1])/max(targets[1],1)
+        j = targets[1]
+        if abs(targets[2]) < 10 * tol      # R: if abs(constraint) < 10*tol
+            mue = min(mue, tol)            #    rho <- 0 (stays 0); mue <- min(mue, tol)
+        end
+        if (tol + tt) <= zero(T)           # R: if (tol + tt) <= 0
+            lambda = zero(T)               #    lambda <- 0
+            hess = Matrix(Diagonal(diag(hess)))  # R: hess <- diag(diag(hess))
+        end
+        if sqrt(tt^2 + eqv^2) <= tol      # R: if sqrt(sum((c(tt,eqv))^2)) <= tol
+            maxit = iters                  #    maxit <- .iters  (break)
+        end
+    end
+    duration = (time_ns() - t0) / 1e9
+    return WeightResult{T}(p, j, duration)
+end
+
+# Inner step of the SQP — faithful Julia transcription of cAIC4's `.weightOptim`
+# (weightOptim.R). Variable names shadow R names directly (ADR-0007 decision 1).
+# `find_weights` is the Mallows objective closure; `equB`, `lowb`, `uppb` are the
+# feasibility data. Returns (p, y, hess, lambda) unscaled, mirroring R's `ans` list.
+#
+# NOTE: `rho` (augmented-penalty coefficient inside this function) is always 0 in this
+# implementation — it is a dead variable in both getWeights.R and weightOptim.R.
+# Kept for auditability (ADR-0007 decision 1).
+function _weightoptim(
+    weights_in::Vector{T},   # R: weights (= p0 on entry)
+    lm_in::T,                # R: lm (Lagrange multiplier)
+    targets_in::Vector{T},   # R: targets [funv, eqv] (unscaled)
+    hess_in::Matrix{T},      # R: hess
+    lambda_in::T,            # R: lambda (augmented-Lagrangian penalty)
+    scaler::Vector{T},       # R: scaler (nw+2 vector)
+    find_weights,            # R: find_weights closure
+    equB::T,                 # R: equB (= 1.0)
+    lowb::Vector{T},         # R: lowb
+    uppb::Vector{T},         # R: uppb
+) where {T<:AbstractFloat}
+    # ── Local constants (weightOptim.R lines 11-14) ───────────────────────────────────
+    rho_aug = zero(T)       # R: rho <- 0  (augmented penalty; stays 0, see NOTE above)
+    inner_maxit = 800        # R: maxit (inner loop limit)
+    delta = T(1e-7)       # R: delta
+    tol = T(1e-8)       # R: tol
+    nw = length(weights_in)   # R: numw = length(m)
+    mm = nw            # R: mm = numw
+
+    # ── Mutable working copies (R: p0 <- weights; hess and targets are passed by value) ─
+    p0 = copy(weights_in)
+    hess = copy(hess_in)
+    lambda = lambda_in
+    targets = copy(targets_in)
+
+    l = zeros(T, 3)
+    ab = hcat(lowb, uppb)    # M×2: [lowb  uppb], R: ab <- cbind(lowb, uppb)
+    st = zeros(T, 3)
+    sc = zeros(T, 2)
+
+    # ── Scale (weightOptim.R lines 26-32) ─────────────────────────────────────────────
+    targets ./= scaler[1:2]
+    p_sc = scaler[3:(nw + 2)]                       # p-scalers (always 1.0)
+    p0 ./= p_sc
+    ab ./= reshape(p_sc, :, 1)                  # divide each row i by p_sc[i]
+    lm = scaler[2] * lm_in / scaler[1]          # R: lm <- scaler[2]*lm/scaler[1]
+    hess .*= (p_sc * p_sc') ./ scaler[1]        # R: hess <- hess*(outer(p_sc,p_sc))/scaler[1]
+
+    # ── Gradient and Jacobian via finite differences (lines 34-48) ────────────────────
+    j = targets[1]
+    a = zeros(T, 1, nw)                 # R: a <- matrix(0, 1, numw)
+    g = zeros(T, nw)                    # R: g <- rep(0, numw)
+    p = copy(p0)                        # R: p <- p0[1:numw]
+    constraint = targets[2]                      # R: constraint <- targets[2]
+
+    for i in 1:nw
+        p0[i] += delta
+        tmpv = p0 .* p_sc                       # R: p0[1:numw] * scaler[3:(numw+2)]
+        funv = find_weights(tmpv)
+        eqv = sum(tmpv) - equB
+        tv = T[funv, eqv] ./ scaler[1:2]
+        g[i] = (tv[1] - j) / delta
+        a[1, i] = (tv[2] - constraint) / delta
+        p0[i] -= delta
+    end
+
+    b = dot(vec(a), p0) - constraint          # R: b <- a %*% p0 - constraint (scalar)
+    ind = -1
+    l[1] = tol - abs(constraint)                 # R: l[1] <- tol - max(abs(constraint))
+
+    # ── Feasibility restoration (lines 50-100) ────────────────────────────────────────
+    if l[1] <= zero(T)
+        ind = 1
+        # Extend p0 and a by one element/column (slack variable)
+        p0_ext = vcat(p0, one(T))               # R: p0[numw+1] <- 1
+        a_ext = hcat(a, T(-constraint))        # R: a <- cbind(a, -constraint)
+        cx = hcat(zeros(T, 1, nw), ones(T, 1, 1))  # R: cx <- cbind(matrix(0,1,numw), 1)
+        dx_ext = ones(T, nw + 1)               # R: dx <- rep(1, numw+1)
+        go = one(T)
+        minit_f = 0
+
+        while go >= tol
+            minit_f += 1
+            gap = hcat(p0_ext[1:mm] - ab[:, 1], ab[:, 2] - p0_ext[1:mm])  # M×2
+            _sort_rows2!(gap)
+            dx_ext[1:mm] = gap[:, 1]
+            dx_ext[nw + 1] = p0_ext[nw + 1]
+
+            # R: y <- try(qr.solve(t(a %*% diag(dx)), dx * t(cx)), silent=TRUE)
+            A_f = (a_ext * Diagonal(dx_ext))'    # (nw+1)×1 matrix
+            rhs_f = dx_ext .* vec(cx')           # nw+1 vector
+            y_f = try
+                A_f \ rhs_f
+            catch
+                @warn "getweights: feasibility restoration (qr.solve) failed — ill-conditioned weight problem; optimum may be non-unique."
+                p_ret = p0_ext[1:nw] .* p_sc
+                hess_ret = scaler[1] .* hess ./ (p_sc * p_sc')
+                return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
+            end
+
+            # R: v <- dx * (dx * (t(cx) - t(a) %*% y))
+            v_f = dx_ext .* (dx_ext .* (vec(cx') .- vec(a_ext' * y_f)))
+            if v_f[nw + 1] > zero(T)
+                z = p0_ext[nw + 1] / v_f[nw + 1]
+                for i in 1:mm
+                    if v_f[i] < zero(T)
+                        z = min(z, -(ab[i, 2] - p0_ext[i]) / v_f[i])
+                    elseif v_f[i] > zero(T)
+                        z = min(z, (p0_ext[i] - ab[i, 1]) / v_f[i])
+                    end
+                end
+                if z >= p0_ext[nw + 1] / v_f[nw + 1]
+                    p0_ext .-= z .* v_f
+                else
+                    p0_ext .-= T(0.9) * z .* v_f
+                end
+                go = p0_ext[nw + 1]
+                if minit_f >= 10
+                    go = zero(T)
+                end
+            else
+                go = zero(T)
+            end
+        end
+
+        a = a_ext[:, 1:nw]                       # R: a <- matrix(a[,1:numw], ncol=numw)
+        b = dot(vec(a), p0_ext[1:nw])            # R: b <- a %*% p0[1:numw] (scalar)
+        p = p0_ext[1:nw]
+    else
+        p = copy(p0)
+    end
+
+    # ── Recompute targets after feasibility (lines 102-111) ───────────────────────────
+    y = zero(T)
+    if ind > 0
+        tmpv = p .* p_sc
+        funv = find_weights(tmpv)
+        eqv = sum(tmpv) - equB
+        targets .= T[funv, eqv] ./ scaler[1:2]
+    end
+
+    j = targets[1]
+    targets[2] -= dot(vec(a), p) - b             # R: targets[2] <- targets[2] - a%*%p + b
+    j = targets[1] - lm * targets[2] + rho_aug * targets[2]^2
+
+    # ── Inner loop (BFGS + bisection line search, lines 113-262) ─────────────────────
+    sx = copy(p)
+    yg = copy(g)
+
+    y_val = zero(T)   # initialized here so it is in scope after the inner loop
+    minit = 0
+    while minit < inner_maxit
+        minit += 1
+
+        # Gradient of augmented Lagrangian (lines 115-127)
+        if ind > 0
+            for i in 1:nw
+                p[i] += delta
+                tmpv = p .* p_sc
+                funv = find_weights(tmpv)
+                eqv = sum(tmpv) - equB
+                tv = T[funv, eqv] ./ scaler[1:2]
+                tv[2] -= dot(vec(a), p) - b
+                tv_aug = tv[1] - lm * tv[2] + rho_aug * tv[2]^2
+                g[i] = (tv_aug - j) / delta
+                p[i] -= delta
+            end
+        end
+
+        # BFGS Hessian update (lines 128-136)
+        if minit > 1
+            yg_d = g .- yg                       # gradient difference
+            sx_d = p .- sx                       # step
+            sc[1] = dot(sx_d, hess * sx_d)
+            sc[2] = dot(sx_d, yg_d)
+            if sc[1] * sc[2] > zero(T)
+                Hsx = hess * sx_d
+                hess .-= (Hsx * Hsx') ./ sc[1]
+                hess .+= (yg_d * yg_d') ./ sc[2]
+            end
+        end
+        sx = copy(p)
+        yg = copy(g)
+
+        # Barrier diagonal (lines 138-142)
+        dx = fill(T(0.1), nw)
+        gap = hcat(p[1:mm] - ab[:, 1], ab[:, 2] - p[1:mm])   # M×2
+        _sort_rows2!(gap)
+        gap1 = gap[:, 1] .+ sqrt(eps(T))        # R: gap[,1] + sqrt(.Machine$double.eps)
+        dx[1:mm] = one(T) ./ gap1
+
+        go_lm = T(-1)
+        lambda /= 10                             # R: lambda <- lambda/10
+
+        # Levenberg–Marquardt feasibility ramp (lines 145-175)
+        p_trial = similar(p)
+        y_val = zero(T)
+        while go_lm <= zero(T)
+            # R: cz <- try(chol(hess + lambda * diag(dx*dx, nw, nw)), silent=TRUE)
+            H_reg = Symmetric(hess .+ lambda .* Diagonal(dx .* dx))
+            cz_U = try
+                cholesky(H_reg).U
+            catch
+                @warn "getweights: Cholesky decomposition failed (ill-conditioned). Weights may be non-unique."
+                p_ret = p .* p_sc
+                hess_ret = scaler[1] .* hess ./ (p_sc * p_sc')
+                return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
+            end
+
+            # R: cz <- try(solve(cz), silent=TRUE)
+            # ADR-0007 decision 2: literal inv of the Cholesky factor — the single
+            # documented exception to §9/§12. Preserves 1:1 source correspondence with
+            # weightOptim.R:154. Do NOT "fix" this to a triangular solve.
+            cz = try
+                inv(cz_U)
+            catch
+                @warn "getweights: Cholesky factor inversion failed (ill-conditioned). Weights may be non-unique."
+                p_ret = p .* p_sc
+                hess_ret = scaler[1] .* hess ./ (p_sc * p_sc')
+                return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
+            end
+
+            # R: yg <- t(cz) %*% g;  y <- try(qr.solve(t(cz) %*% t(a), yg))
+            yg_kkt = cz' * g                     # R: yg <- t(cz) %*% g
+            A_kkt = cz' * a'                    # M×1 matrix
+            y_kkt = try
+                A_kkt \ yg_kkt
+            catch
+                @warn "getweights: KKT multiplier solve failed (ill-conditioned). Weights may be non-unique."
+                p_ret = p .* p_sc
+                hess_ret = scaler[1] .* hess ./ (p_sc * p_sc')
+                return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
+            end
+            y_val = only(y_kkt)
+
+            # R: u <- -cz %*% (yg - (t(cz) %*% t(a)) %*% y)
+            u_step = -cz * (yg_kkt .- A_kkt .* y_val)
+            p_trial .= u_step[1:nw] .+ p
+            go_lm = minimum(vcat(p_trial[1:mm] - ab[:, 1], ab[:, 2] - p_trial[1:mm]))
+            lambda *= 3                         # R: lambda <- 3*lambda
+        end
+
+        # ── Three-point bisection line search (lines 176-232) ─────────────────────────
+        l[1] = zero(T)
+        targets1 = copy(targets)
+        targets2 = copy(targets)
+        st[1] = j
+        st[2] = j
+        p1 = copy(p)              # ptt[:,1]
+        p2 = copy(p)              # ptt[:,2] (midpoint, updated each bisection step)
+        l[3] = one(T)
+        p3 = copy(p_trial)        # ptt[:,3] (trial point)
+
+        tmpv = p3 .* p_sc
+        funv = find_weights(tmpv)
+        eqv = sum(tmpv) - equB
+        targets3 = T[funv, eqv] ./ scaler[1:2]
+        st[3] = targets3[1]
+        targets3[2] -= dot(vec(a), p3) - b
+        st[3] = targets3[1] - lm * targets3[2] + rho_aug * targets3[2]^2
+
+        go_bs = one(T)
+        while go_bs > tol
+            l[2] = (l[1] + l[3]) / 2
+            p2 = (one(T) - l[2]) .* p .+ l[2] .* p_trial   # R: ptt[,2] <- (1-l[2])*p + l[2]*p0
+            tmpv = p2 .* p_sc
+            funv = find_weights(tmpv)
+            eqv = sum(tmpv) - equB
+            targets2 .= T[funv, eqv] ./ scaler[1:2]
+            st[2] = targets2[1]
+            targets2[2] -= dot(vec(a), p2) - b
+            st[2] = targets2[1] - lm * targets2[2] + rho_aug * targets2[2]^2
+
+            targetsm = maximum(st)
+            if targetsm < j
+                targetsn = minimum(st)
+                go_bs = tol * (targetsm - targetsn) / (j - targetsm)
+            end
+
+            con1 = st[2] >= st[1]
+            con2 = st[1] <= st[3] && st[2] < st[1]
+            con3 = st[2] < st[1] && st[1] > st[3]
+
+            if con1
+                st[3] = st[2];
+                targets3 = copy(targets2);
+                l[3] = l[2];
+                p3 = copy(p2)
+            end
+            if con2
+                st[3] = st[2];
+                targets3 = copy(targets2);
+                l[3] = l[2];
+                p3 = copy(p2)
+            end
+            if con3
+                st[1] = st[2];
+                targets1 = copy(targets2);
+                l[1] = l[2];
+                p1 = copy(p2)
+            end
+
+            if go_bs >= tol
+                go_bs = l[3] - l[1]
+            end
+        end
+
+        # ── Select best of three-point bracket (lines 233-261) ────────────────────────
+        ind = 1
+        targetsn = minimum(st)
+        if j <= targetsn
+            inner_maxit = minit                  # converged: no progress, break
+        end
+        reduce = (j - targetsn) / (one(T) + abs(j))
+        if reduce < tol
+            inner_maxit = minit
+        end
+
+        con1 = st[1] < st[2]
+        con2 = st[3] < st[2] && st[1] >= st[2]
+        con3 = st[1] >= st[2] && st[3] >= st[2]
+
+        if con1
+            j = st[1];
+            p = copy(p1);
+            targets = copy(targets1)
+        end
+        if con2
+            j = st[3];
+            p = copy(p3);
+            targets = copy(targets3)
+        end
+        if con3
+            j = st[2];
+            p = copy(p2);
+            targets = copy(targets2)
+        end
+    end  # inner loop
+
+    # ── Unscale and return (weightOptim.R lines 263-267) ─────────────────────────────
+    p_out = p .* p_sc                         # = p * 1.0 (p_sc = ones)
+    y_out = scaler[1] * y_val / scaler[2]     # R: y <- scaler[1]*y/scaler[2]
+    hess_out = scaler[1] .* hess ./ (p_sc * p_sc')  # = scaler[1] * hess
+    return (p=p_out, y=y_out, hess=hess_out, lambda=lambda)
+end
+
+# Sort the two columns of an M×2 matrix in-place so each row is in ascending order.
+# Transcribes R's `t(apply(gap, 1, FUN=function(x) sort(x)))`.
+function _sort_rows2!(m::Matrix)
+    for i in axes(m, 1)
+        if m[i, 1] > m[i, 2]
+            m[i, 1], m[i, 2] = m[i, 2], m[i, 1]
+        end
+    end
+    return m
 end

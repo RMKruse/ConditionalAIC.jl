@@ -71,6 +71,14 @@ Rank a user-supplied set of fitted models by conditional AIC (port of `cAIC4`'s
 function anocaic end
 
 export caic,
-    anocaic, stepcaic, modelavg, CAICResult, AnocaicTable, StepcaicResult, ModelAvgResult
+    anocaic,
+    stepcaic,
+    modelavg,
+    getweights,
+    CAICResult,
+    AnocaicTable,
+    StepcaicResult,
+    ModelAvgResult,
+    WeightResult
 
 end # module cAIC

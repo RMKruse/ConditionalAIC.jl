@@ -262,6 +262,215 @@ end
     end
 end
 
+# ── M4.5 Zhang-optimal weight optimizer (issue #50) ─────────────────────────────────
+
+@testitem "WeightResult is a concrete parametric type with the right fields" tags = [
+    :level1
+] begin
+    # Tracer bullet (CLAUDE §7 step 3): WeightResult{T} is defined, has the documented
+    # fields, and the M=1 degenerate case returns weights=[1.0] (docs/math/0009 §2.3).
+    using MixedModels
+    using cAIC: cAIC
+
+    @test isconcretetype(cAIC.WeightResult{Float64})
+    @test fieldnames(cAIC.WeightResult) == (:weights, :objective, :duration)
+
+    # M=1 degenerate: ŵ = (1), J = (y-μ₁)ᵀ(y-μ₁) + 2σ²ρ₁ — no optimizer needed
+    y = [1.0, 2.0, 3.0]
+    mu = reshape([1.5, 2.0, 2.8], 3, 1)    # 3×1 matrix
+    rho = [2.5]
+    sigma_sq = 1.2
+    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+    @test res isa cAIC.WeightResult{Float64}
+    @test res.weights ≈ [1.0]
+    expected_J = sum((y - mu[:, 1]) .^ 2) + 2 * sigma_sq * rho[1]
+    @test res.objective ≈ expected_J
+    @test res.duration isa Float64
+end
+
+@testitem "Zhang Level-1: _getweights_raw matches cAIC4/.weightOptim on synthetic inputs (case 1, M=3)" tags = [
+    :level1
+] begin
+    # Level-1 isolation (CLAUDE §6 / ADR-0003 / docs/math/0009 §7): feeds IDENTICAL
+    # synthetic (y, mu, rho, sigma_sq) to Julia's _getweights_raw and the R-pre-computed
+    # fixture. No model fitting — pure optimizer transcription check. Both sides converge
+    # to the same unique minimiser (MᵀM ≻ 0, well-conditioned) so weight vectors agree.
+    # Tolerance rtol=1e-6 (docs/math/0009 §7 target; relaxed band recorded in DECISIONS
+    # at implementation if the iterative stopping band forces it).
+    using HDF5
+    using cAIC: cAIC
+
+    L1_RTOL = 1e-6
+    L1_ATOL = 1e-10
+
+    fixture = joinpath(@__DIR__, "fixtures", "zhang_weights_level1.h5")
+    @test isfile(fixture)
+
+    y = h5read(fixture, "case1/inputs/y")
+    mu = h5read(fixture, "case1/inputs/mu")       # HDF5 stores as column-major
+    rho = h5read(fixture, "case1/inputs/rho")
+    sigma_sq = only(h5read(fixture, "case1/inputs/sigma_sq"))
+    r_weights = h5read(fixture, "case1/outputs_r/weights")
+    r_objective = only(h5read(fixture, "case1/outputs_r/objective"))
+
+    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+
+    @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+    @test all(≥(-1e-10), res.weights)
+    @test res.objective ≈ r_objective rtol = L1_RTOL atol = L1_ATOL
+end
+
+@testitem "Zhang Level-1: _getweights_raw matches cAIC4/.weightOptim on synthetic inputs (case 2, M=2)" tags = [
+    :level1
+] begin
+    using HDF5
+    using cAIC: cAIC
+
+    L1_RTOL = 1e-6
+    L1_ATOL = 1e-10
+
+    fixture = joinpath(@__DIR__, "fixtures", "zhang_weights_level1.h5")
+    @test isfile(fixture)
+
+    y = h5read(fixture, "case2/inputs/y")
+    mu = h5read(fixture, "case2/inputs/mu")
+    rho = h5read(fixture, "case2/inputs/rho")
+    sigma_sq = only(h5read(fixture, "case2/inputs/sigma_sq"))
+    r_weights = h5read(fixture, "case2/outputs_r/weights")
+    r_objective = only(h5read(fixture, "case2/outputs_r/objective"))
+
+    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+
+    @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+    @test all(≥(-1e-10), res.weights)
+    @test res.objective ≈ r_objective rtol = L1_RTOL atol = L1_ATOL
+end
+
+@testitem "getweights(ModelAvgResult) returns a WeightResult with weights summing to 1" tags = [
+    :level2
+] begin
+    # End-to-end: fit two sleepstudy candidates, build ModelAvgResult (Buckland path),
+    # call getweights to optimize Zhang weights. The result must be a WeightResult{Float64}
+    # with non-negative weights summing to 1.
+    using MixedModels
+    using cAIC: modelavg, getweights, WeightResult, ModelAvgResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res_buckland = modelavg(m1, m2; weights=:smoothed)
+    wr = getweights(res_buckland)
+
+    @test wr isa WeightResult{Float64}
+    @test length(wr.weights) == 2
+    @test all(≥(-1e-10), wr.weights)
+    @test sum(wr.weights) ≈ 1.0 atol = 1e-8
+    @test isfinite(wr.objective)
+    @test wr.objective >= 0
+    @test wr.duration isa Float64
+end
+
+@testitem "getweights is type-stable" tags = [:level1] begin
+    using MixedModels, Test
+    using cAIC: modelavg, getweights, WeightResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res_buckland = modelavg(m1, m2; weights=:smoothed)
+    wr = @inferred WeightResult{Float64} getweights(res_buckland)
+    @test wr isa WeightResult{Float64}
+end
+
+@testitem "modelavg with weights=:zhang calls getweights and returns a ModelAvgResult" tags = [
+    :level2
+] begin
+    # modelavg(...; weights=:zhang) uses the Zhang optimizer internally and stores
+    # the WeightResult in the returned ModelAvgResult (weighttype=:zhang).
+    using MixedModels
+    using cAIC: modelavg, ModelAvgResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res = modelavg(m1, m2; weights=:zhang)
+    @test res isa ModelAvgResult{Float64}
+    @test res.weighttype == :zhang
+    @test length(res.weights) == 2
+    @test all(≥(-1e-10), res.weights)
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+end
+
+@testitem "live R re-validation of the Zhang Level-1 fixture (gated by CAIC_LIVE_RCALL)" tags = [
+    :live_rcall
+] begin
+    # Fixture-rot guard: regenerate the Level-1 Zhang fixture with live cAIC4
+    # and verify the committed fixture has not drifted. Skipped unless CAIC_LIVE_RCALL=1.
+    using HDF5
+    using cAIC: cAIC
+
+    if get(ENV, "CAIC_LIVE_RCALL", "0") == "1"
+        here = @__DIR__
+        tmp = joinpath(mktempdir(), "zhang_weights_level1.h5")
+        run(
+            addenv(
+                `Rscript $(joinpath(here, "generate_fixtures_zhang_level1.R"))`,
+                "FIXTURE" => tmp,
+            ),
+        )
+        for case_id in ("case1", "case2")
+            committed_w = h5read(
+                joinpath(here, "fixtures", "zhang_weights_level1.h5"),
+                "$case_id/outputs_r/weights",
+            )
+            live_w = h5read(tmp, "$case_id/outputs_r/weights")
+            @test live_w ≈ committed_w rtol = 1e-8 atol = 1e-8
+        end
+    else
+        @info "Skipping Zhang Level-1 live-RCall re-validation (set CAIC_LIVE_RCALL=1)"
+    end
+end
+
 @testitem "live R re-validation of the modelavg Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin

@@ -121,6 +121,28 @@ function Base.getindex(e::NamedEffects{K}, k) where {K}
 end
 
 """
+    WeightResult{T<:AbstractFloat}
+
+The result of Zhang-optimal weight optimization over a set of Gaussian
+`LinearMixedModel{T}` candidates (port of `cAIC4`'s `getWeights`/`.weightOptim`).
+Returned by [`getweights`](@ref).
+
+The Zhang (2014) Mallows criterion J(w) = (y − μw)ᵀ(y − μw) + 2σ̂²(ρᵀw) is minimised
+over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
+Lagrangian SQP of `cAIC4`'s `.weightOptim` (ADR-0007, docs/math/0009 §2).
+
+- `weights::Vector{T}` — the optimal model-averaging weights; non-negative and summing to 1.
+- `objective::T` — the minimised Mallows criterion J(ŵ) (the `functionvalue` of `getWeights`).
+- `duration::Float64` — wall-clock seconds for the optimization (excluded from reproducibility
+  assertions per docs/math/0009 §6.5).
+"""
+struct WeightResult{T<:AbstractFloat}
+    weights::Vector{T}
+    objective::T
+    duration::Float64
+end
+
+"""
     ModelAvgResult{T<:AbstractFloat}
 
 The result of cAIC-weighted model averaging over a set of Gaussian `LinearMixedModel{T}`
