@@ -27,6 +27,7 @@ using MixedModels:
     fit,
     fixef,
     fixefnames,
+    formula,
     raneftables
 using GLM:
     GLM,
@@ -76,6 +77,7 @@ export caic,
     modelavg,
     getweights,
     predictma,
+    summaryma,
     CAICResult,
     AnocaicTable,
     StepcaicResult,

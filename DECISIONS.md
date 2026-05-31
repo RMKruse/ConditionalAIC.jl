@@ -6,6 +6,32 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — `summaryma` display divergences from `summaryMA`: candidate formulas in place of `z$call`; corrected random-effects heading
+
+**Status:** accepted (display-only). Applies to `summaryma` (issue #53, M4.5; docs/math/0009 §5).
+
+`summaryma([io=stdout,] res; randeff=false)` is the port of `cAIC4`'s `summaryMA`. It is a pure
+display function — it prints quantities (`fixeff`, `weights`, `raneff`) already validated where they
+are computed, so it carries **no** R reference fixture. Two cosmetic divergences are recorded here:
+
+1. **Candidate formulas in place of `z$call`.** `summaryMA` opens by printing `z$call` — the captured
+   `modelAvg(...)` call. `ModelAvgResult` retains no call object (it stores the candidate models, not
+   the invocation), so `summaryma` prints each candidate's **formula** (`string(formula(mᵢ))`, public
+   StatsAPI accessor) in input order under a "Candidate models:" heading. This is strictly more
+   informative for a reader than a reconstructed call and needs no field we do not already hold.
+
+2. **Corrected random-effects heading.** With `randeff = TRUE`, `summaryMA` prints the averaged random
+   effects under a heading that reads `"Model Averaged Fixed Effects:"` — a copy-paste of the
+   fixed-effects label (`R/summaryMA.R:45`), plainly an upstream bug. `summaryma` prints the correct
+   `"Model Averaged Random Effects:"`. Consistent with ADR-0007 decision 3 (faithful to the algorithm,
+   not to a bug), the defect is not transcribed.
+
+The candidate weights are printed `round(·; digits = 6)`, matching `summaryMA`'s
+`round(o$weights, digits = 6)`. The default REPL view of a `ModelAvgResult` remains the compact
+`Base.show` method (landed #49), distinct from this fuller, opt-in report.
+
+---
+
 ## 2026-05-31 — `predictma` `new_re_levels` default `:error` (mirrors `lme4`'s `allow.new.levels = FALSE`); Level-2 prediction band `atol = 5e-3`
 
 **Status:** accepted (measured). Applies to `predictma` (issue #52, M4.5; docs/math/0009 §5/§6.3).

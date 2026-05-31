@@ -1124,3 +1124,165 @@ end
         @info "Skipping modelavg Level-2 live-RCall re-validation (set CAIC_LIVE_RCALL=1)"
     end
 end
+
+@testitem "summaryma prints the model-averaged fixed effects with names and values" tags = [
+    :level2
+] begin
+    # Tracer: summaryma (port of cAIC4's summaryMA) prints a "Model Averaged Fixed Effects"
+    # block listing each averaged coefficient name. io-first signature, testable via sprint.
+    using MixedModels, Test
+    using cAIC: modelavg, summaryma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    str = sprint(summaryma, res)
+    @test occursin("Model Averaged Fixed Effects", str)
+    for k in res.fixeff.keys
+        @test occursin(k, str)
+    end
+end
+
+@testitem "summaryma prints the candidate weights rounded to 6 digits" tags = [:level2] begin
+    # cAIC4's summaryMA prints `round(o$weights, digits = 6)` under a
+    # "Weights for underlying Candidate Models" heading, one weight per candidate.
+    using MixedModels, Test
+    using cAIC: modelavg, summaryma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    str = sprint(summaryma, res)
+    @test occursin("Weights for underlying Candidate Models", str)
+    for w in res.weights
+        @test occursin(string(round(w; digits=6)), str)
+    end
+end
+
+@testitem "summaryma lists the candidate model formulas in input order" tags = [:level2] begin
+    # In place of cAIC4's `z$call` (not stored by ModelAvgResult), summaryma prints each
+    # candidate's formula under a "Candidate models" heading, in input order (a recorded
+    # divergence from summaryMA; docs/math/0009 §5).
+    using MixedModels, Test
+    using cAIC: modelavg, summaryma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    str = sprint(summaryma, res)
+    @test occursin("Candidate models", str)
+    @test occursin(string(formula(m1)), str)
+    @test occursin(string(formula(m2)), str)
+    # input order: candidate 1's formula appears before candidate 2's
+    @test findfirst(string(formula(m1)), str)[1] < findfirst(string(formula(m2)), str)[1]
+end
+
+@testitem "summaryma includes random effects only when randeff=true" tags = [:level2] begin
+    # summaryMA's `randeff` flag (default FALSE): the model-averaged random effects are
+    # printed only when randeff=true. Default output carries no random-effects section.
+    using MixedModels, Test
+    using cAIC: modelavg, summaryma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    str_default = sprint(summaryma, res)
+    @test !occursin("Random Effects", str_default)
+
+    str_re = sprint((io, r) -> summaryma(io, r; randeff=true), res)
+    @test occursin("Model Averaged Random Effects", str_re)
+    # a representative random-effect coordinate (grouping, level, term) is rendered
+    g, lev, term = first(res.raneff.keys)
+    @test occursin(lev, str_re)
+end
+
+@testitem "summaryma without an io prints to stdout and returns nothing" tags = [:level2] begin
+    # The convenience method summaryma(res) defaults io to stdout and returns nothing,
+    # so it is a pure side-effecting report (the cat-based summaryMA idiom).
+    using MixedModels, Test
+    using cAIC: modelavg, summaryma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    mktemp() do _, tmpio
+        ret = redirect_stdout(tmpio) do
+            summaryma(res)
+        end
+        @test ret === nothing
+        flush(tmpio)
+        seekstart(tmpio)
+        captured = read(tmpio, String)
+        @test occursin("Model Averaged Fixed Effects", captured)
+    end
+end

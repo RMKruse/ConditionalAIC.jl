@@ -219,9 +219,13 @@ For new data `D*`, each candidate predicts conditionally and the predictions are
 `lme4`'s `allow.new.levels = FALSE` (§6.3) — `:population` / `:missing` are opt-in. The averaged
 prediction over the union (§4) requires all candidates to predict on the same `D*` schema.
 
-`summaryMA(res; randeff=false)` (`R/summaryMA.R`) prints the call, the averaged fixed effects, the
-weights, and — when `randeff=true` — the averaged random effects. The default REPL view of
-`ModelAvgResult` is a `Base.show` method.
+`summaryma([io=stdout,] res; randeff=false)` (port of `R/summaryMA.R`'s `summaryMA`) prints the
+candidate model formulas, the averaged fixed effects, the candidate weights (`round(·; digits=6)`,
+matching R), and — when `randeff=true` — the averaged random effects keyed `grouping[level] term`.
+Two display divergences (§6.6/§6.7): (a) `ModelAvgResult` retains no `call`, so the candidate
+**formulas** stand in for `summaryMA`'s `z$call`; (b) the random-effects heading is corrected from
+`summaryMA`'s copy-pasted "…Fixed Effects" label (an upstream bug, not transcribed — ADR-0007
+decision 3). The default REPL view of `ModelAvgResult` is the compact `Base.show` method.
 
 ---
 
