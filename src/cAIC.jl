@@ -11,18 +11,26 @@ via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (
 terminal node a backward `stepcaic` search reaches when the last random-effects term is dropped —
 a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`, M4 / ADR-0006). All assemble into
 a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5),
-returning an [`AnocaicTable`](@ref). The search verb (`stepcaic`, M4) remains a stub. All access to
+returning an [`AnocaicTable`](@ref). [`stepcaic`](@ref) runs conditional stepwise random-effects
+selection (M4, backward direction), returning a [`StepcaicResult`](@ref). All access to
 `MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
 """
 module cAIC
 
 using MixedModels:
-    MixedModel, LinearMixedModel, GeneralizedLinearMixedModel, Poisson, Bernoulli, Binomial
+    MixedModel,
+    LinearMixedModel,
+    GeneralizedLinearMixedModel,
+    Poisson,
+    Bernoulli,
+    Binomial,
+    fit
 using GLM:
     GLM,
     RegressionModel,
     LinearModel,
     GeneralizedLinearModel,
+    lm,
     coef,
     response,
     predict,
@@ -47,7 +55,7 @@ include("stepcaic.jl")       # backward/forward candidate enumeration (M4 stepwi
 
 # ── Public surface ──────────────────────────────────────────────────────────
 # `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) is
-# implemented in `comparison.jl`. `stepcaic` (M4 search) remains a zero-method stub.
+# implemented in `comparison.jl`. `stepcaic` (M4 search) is implemented in `stepcaic.jl`.
 # See CONTEXT.md for the Scoring / Comparison / Search vocabulary.
 
 """
@@ -58,16 +66,6 @@ Rank a user-supplied set of fitted models by conditional AIC (port of `cAIC4`'s
 """
 function anocaic end
 
-"""
-    stepcaic(model)
-
-Conditional stepwise selection: search a candidate space of random-/fixed-effects
-terms guided by the conditional AIC.
-
-Walking-skeleton stub — carries no methods yet (M4).
-"""
-function stepcaic end
-
-export caic, anocaic, stepcaic, CAICResult, AnocaicTable
+export caic, anocaic, stepcaic, CAICResult, AnocaicTable, StepcaicResult
 
 end # module cAIC

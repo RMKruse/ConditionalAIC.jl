@@ -433,9 +433,74 @@ Faithful port (DECISIONS 2026-05-30). Pin precisely:
 - **Singular carry-forward**: keep the as-fit (possibly singular) candidate as the incumbent, track
   `refit` (`R/stepcAIC.R:323–324`).
 
-> *(to fill: the decision cascade as an explicit predicate table mapping `(minCAIC vs cAICofMod,
-> dirWasBoth, direction, improvementInBoth, equalToLastStep, terminal?, keep-min?, steps,
-> #candidates)` → `(accept?, newdir, stop?)`, transcribed from lines 565–657.)*
+### 4.1 The **backward** greedy loop (the skeleton subset, #40)
+
+The skeleton implements the `direction = :backward`, `dirWasBoth = false` branch of the driver —
+the only branch where `forwardStep`/`mergeChanges`/`both`-alternation are unreachable. Let
+`score(·)` be the consistent per-candidate cAIC (§0): the M2/M3 `caic` on a `MixedModel`, the
+ADR-0006 terminal `caic` on the `lm`/`glm`. Let `incumbent` be the current best `(spec, model,
+result)` and `cAICofMod = result.caic`. The loop (faithful to the extracted `stepcAIC` body,
+backward arcs only):
+
+```
+incumbent ← (extract(m), m, score(m))          # entry: score the input
+equalToLastStep ← false
+repeat (at most `steps` times):
+    cands ← backwardcandidates(incumbent.spec; keep, selectcorrelation, allownointercept)
+    if isempty(cands):                          # §2 backwardStep NA / terminal signal
+        if keep is nothing and incumbent is a single random intercept:
+            cands ← {lm/glm terminal node}          # §0.1 terminal descent (only with NO keep floor)
+        else:  break (stop; keep incumbent)         # exhausted neighbourhood / keep floor reached
+    cands ← [c for c in cands if c ≠ incumbent.spec]   # mergeChanges drop-original: backwardStep's keep
+    if isempty(cands):  break                          #   re-add can reconstitute the unchanged model;
+                                                       #   an emptied neighbourhood is the minCAIC==Inf arc
+    scored   ← [ (c, score(render+fit c)) for c in cands ]
+    bestidx  ← argmin caic over scored          # which.min(aicTab$caic)
+    minCAIC  ← scored[bestidx].caic             # (Inf if cands empty — handled above)
+    record the step (direction, cAICofMod, scored, bestidx, accepted)
+    if minCAIC ≤ cAICofMod:                      # the ≤ acceptance rule (:223–244)
+        accept: incumbent ← scored[bestidx]; cAICofMod ← minCAIC
+        if minCAIC == cAICofMod (a plateau move):  equalToLastStep ← true   # tie guard (:232)
+        if the accepted move is the lm/glm terminal,
+           or equals the keep-minimal model,
+           or steps exhausted, or a single candidate:  break (stop)         # :223–235
+        # else continue from the new incumbent
+    else:                                        # minCAIC > cAICofMod (:253–258)
+        break (stop; keep incumbent)
+return StepcaicResult(incumbent, path, options)
+```
+
+The mapping to the extracted source decision cascade (`stepcAIC` body, backward `!dirWasBoth`
+arcs): `minCAIC == Inf` (empty, non-terminal) → stop keep incumbent (:217–221); `minCAIC ≤
+cAICofMod` with the move terminal / keep-minimal → accept-and-stop (:223–229); `minCAIC ≤
+cAICofMod` otherwise → accept, advance unless `steps==0 | #cands==1` (:230–244); `minCAIC >
+cAICofMod` → stop keep incumbent (:253–258). The `equalToLastStep` guard prevents an infinite
+plateau loop when consecutive moves tie. **Singular carry-forward**: a scored candidate's `model`
+is the fit *as given* (possibly singular); `caic` reduces-and-refits internally for the *score*,
+recording `refit` on the `CAICResult` (the incumbent carries the as-fit model, mirroring
+`R/stepcAIC.R:323–324`). `keep` is supplied as a parsed `RESpec` floor (§5), forwarded to
+`backwardcandidates` and used for the keep-minimal stop test.
+
+**Family dispatch.** The loop above is model-family-agnostic; only `score(·)`, the candidate
+refit, and the terminal fit differ between a Gaussian `LinearMixedModel` and a non-Gaussian
+`GeneralizedLinearMixedModel`. The two public `stepcaic` methods resolve those three pieces and
+delegate to one shared driver:
+
+| piece          | `LinearMixedModel`                                  | `GeneralizedLinearMixedModel`                          |
+|----------------|-----------------------------------------------------|--------------------------------------------------------|
+| `score(model)` | `caic(model; method, hessian, nboot, sigmapenalty, rng)` | `caic(model; method, nboot, rng)`                 |
+| candidate refit| `fit(MixedModel, render(c), data; REML)`            | `fit(MixedModel, render(c), data, family)`             |
+| terminal fit   | `lm(y ~ fixed, data)` → `caic`                      | `glm(y ~ fixed, data, family)` → `caic`                |
+
+The GLMM scoring-kwarg set is **smaller**: `caic(::GeneralizedLinearMixedModel)` has no Gaussian
+`hessian`/`sigmapenalty` arguments (the Greven–Kneib Hessian and the σ-penalty are LMM-only), so
+the GLMM method neither accepts nor forwards them. Both methods forward their kwarg set
+**unchanged** to every candidate (the consistent-scoring requirement). The terminal fit uses the
+model's GLM distribution family (`m.resp.d`), so the GLMM terminal is the family `glm`, scored by
+the same ADR-0006 `caic(::RegressionModel)` terminal as the Gaussian `lm`.
+
+> *(to fill: the forward / `both` arcs — `improvementInBoth` flip, the `both`-start-forward and
+> per-step direction flip (:212–263), out of the backward skeleton's scope.)*
 
 ## 5. Options, result, and provenance
 
@@ -452,8 +517,62 @@ Faithful port (DECISIONS 2026-05-30). Pin precisely:
   candidates + move; the *Search path* of `CONTEXT.md`, replacing `cAIC4`'s printed `trace`), and
   the resolved options for provenance.
 
-> *(to fill: the `StepcaicResult{T}` and per-step `StepRecord{T}` field lists; the k-best
-> dedup rule, `cAIC4`'s `duplicatedMers`.)*
+### 5.1 The result types (the skeleton subset, #40)
+
+The search returns a `StepcaicResult{T,M}` carrying the *selected* model, its score, the full
+search `path`, and the resolved options. The `path` is the structured analogue of `cAIC4`'s
+printed `trace`: one `StepRecord{T}` per loop iteration, each holding **every** candidate scored
+that step (the *Search path* of `CONTEXT.md`), not only the accepted one.
+
+```
+ScoredCandidate{T}                       # one scored neighbour of a step
+  spec      :: Union{RESpec,Nothing}     #   the candidate RE structure; `nothing` = lm/glm terminal node (§0.1)
+  caic      :: T                         #   its conditional AIC (the `score` of §4.1)
+  dof       :: T                         #   the bias-corrected effective df ρ that AIC was penalised by (the `df` of the trace)
+
+StepRecord{T}                            # one greedy step
+  direction      :: Symbol               #   :backward (the skeleton's only value)
+  incumbentcaic  :: T                    #   cAICofMod at the start of the step
+  candidates     :: Vector{ScoredCandidate{T}}   #   every neighbour scored this step
+  bestindex      :: Int                  #   argmin index into `candidates` (0 if the neighbourhood was empty)
+  accepted       :: Bool                 #   whether the best candidate was accepted (minCAIC ≤ incumbentcaic)
+
+StepcaicResult{T,M<:RegressionModel}
+  selected   :: CAICResult{T,M}          #   the score of the selected model (M2/M3 or terminal)
+  model      :: M                        #   the selected fitted model (a `MixedModel` or the `lm`/`glm` terminal)
+  path       :: Vector{StepRecord{T}}    #   the per-step search trace, in order
+  saved      :: Vector{CAICResult{T}}    #   the ranked k-best scores (`savedmodels`)
+  options    :: StepcaicOptions          #   the resolved options for provenance
+```
+
+`ScoredCandidate.spec` is a small `Union{RESpec,Nothing}` (type-stable), the `nothing` reserving
+the terminal slot. The `caic`/`dof` pair is the `cAIC`/`df` the trace prints per candidate: `dof` is
+the candidate's own `CAICResult.dof` (the bias-corrected ρ it was penalised by), recorded as the
+driver already holds it — no re-derivation — so `(caic, dof)` together expose the full penalised
+score the greedy rule acted on. `StepcaicResult` is parametric on the *selected* model type `M` (a `MixedModel`
+when the search stops above the terminal, the `GLM.jl` `TableRegressionModel` at the terminal); the
+driver is not a hot kernel, so the across-path return-type variation is acceptable.
+
+### 5.2 The `savedmodels` k-best set (`numberOfSavedModels`)
+
+`savedmodels` (→ `cAIC4` `numberOfSavedModels`) governs `result.saved`. The driver **accumulates
+every distinct scored model across the whole search**, deduplicated by random-effects structure
+(the `_savedkey` canonical `cnms` term-multiset for a `RESpec`; a reserved sentinel for the
+`lm`/`glm` terminal — the `duplicatedMers` analogue, **keep-first**), and at return ranks them by
+cAIC **ascending** and keeps the best `savedmodels` (`0` ⇒ all; the default `1` ⇒ the selected
+model only, and the accumulation is skipped). The element type is the `M`-erased `CAICResult{T}`,
+not `CAICResult{T,M}`, so one ranked list can hold both the `MixedModel` candidates and the terminal
+when both rank among the best.
+
+This **unifies** `cAIC4`'s split return — `cAIC4` hands back the selected model as `finalModel`
+separately from the runner-ups in `additionalModels` (which it post-trims with `additionalModels[-1]`
+to drop the global minimum, since that *is* `finalModel`). The set of models and their cAICs is
+identical; the *packaging* differs (one ranked vector with the selected at `saved[1]` vs the
+`finalModel` + `additionalModels` pair). Recorded as a deliberate shape choice in DECISIONS.md
+(2026-05-31). The numbers are the ground-truth check: `c(bestCAIC, attr(additionalModels,"cAICs"))`
+equals `[s.caic for s in result.saved]` within the Level-2 band.
+
+> *(to fill: the `StepcaicOptions` exact field list as the forward/`both` options come online.)*
 
 ## 6. Validation plan (two-level)
 
