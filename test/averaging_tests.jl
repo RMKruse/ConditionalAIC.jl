@@ -214,6 +214,12 @@ end
     str = sprint(show, MIME("text/plain"), res)
     @test occursin("Model-averaged mixed model", str)
     @test occursin("Buckland", str)
+    # The display is the full averaging report (port of summaryMA, folded into show):
+    # candidate models, a cAIC + weight table, the averaged fixed effects, and the
+    # averaged random effects.
+    @test occursin("Candidate models", str)
+    @test occursin("Model Averaged Fixed Effects", str)
+    @test occursin("Model Averaged Random Effects", str)
 end
 
 @testitem "modelavg Buckland weights match cAIC4 modelAvg(opt=FALSE) end-to-end (Level-2)" tags = [
@@ -1125,13 +1131,13 @@ end
     end
 end
 
-@testitem "summaryma prints the model-averaged fixed effects with names and values" tags = [
+@testitem "show prints the model-averaged fixed effects with names and values" tags = [
     :level2
 ] begin
-    # Tracer: summaryma (port of cAIC4's summaryMA) prints a "Model Averaged Fixed Effects"
-    # block listing each averaged coefficient name. io-first signature, testable via sprint.
+    # The display of a ModelAvgResult (port of cAIC4's summaryMA, folded into Base.show)
+    # prints a "Model Averaged Fixed Effects" block listing each averaged coefficient name.
     using MixedModels, Test
-    using cAIC: modelavg, summaryma
+    using cAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1150,18 +1156,19 @@ end
     )
     res = modelavg(m1, m2; weights=:smoothed)
 
-    str = sprint(summaryma, res)
+    str = sprint(show, MIME("text/plain"), res)
     @test occursin("Model Averaged Fixed Effects", str)
     for k in res.fixeff.keys
         @test occursin(k, str)
     end
 end
 
-@testitem "summaryma prints the candidate weights rounded to 6 digits" tags = [:level2] begin
-    # cAIC4's summaryMA prints `round(o$weights, digits = 6)` under a
-    # "Weights for underlying Candidate Models" heading, one weight per candidate.
+@testitem "show prints the candidate cAICs and weights rounded to 6 digits" tags = [:level2] begin
+    # The display carries a per-candidate cAIC + weight table; the weights are
+    # `round(·; digits=6)` (matching cAIC4's summaryMA `round(o$weights, digits = 6)`),
+    # one row per candidate.
     using MixedModels, Test
-    using cAIC: modelavg, summaryma
+    using cAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1180,19 +1187,22 @@ end
     )
     res = modelavg(m1, m2; weights=:smoothed)
 
-    str = sprint(summaryma, res)
-    @test occursin("Weights for underlying Candidate Models", str)
+    str = sprint(show, MIME("text/plain"), res)
+    @test occursin("Cand", str)
     for w in res.weights
         @test occursin(string(round(w; digits=6)), str)
     end
+    for c in res.caics
+        @test occursin(string(round(c; digits=4)), str)
+    end
 end
 
-@testitem "summaryma lists the candidate model formulas in input order" tags = [:level2] begin
-    # In place of cAIC4's `z$call` (not stored by ModelAvgResult), summaryma prints each
+@testitem "show lists the candidate model formulas in input order" tags = [:level2] begin
+    # In place of cAIC4's `z$call` (not stored by ModelAvgResult), the display prints each
     # candidate's formula under a "Candidate models" heading, in input order (a recorded
     # divergence from summaryMA; docs/math/0009 §5).
     using MixedModels, Test
-    using cAIC: modelavg, summaryma
+    using cAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1211,7 +1221,7 @@ end
     )
     res = modelavg(m1, m2; weights=:smoothed)
 
-    str = sprint(summaryma, res)
+    str = sprint(show, MIME("text/plain"), res)
     @test occursin("Candidate models", str)
     @test occursin(string(formula(m1)), str)
     @test occursin(string(formula(m2)), str)
@@ -1219,11 +1229,12 @@ end
     @test findfirst(string(formula(m1)), str)[1] < findfirst(string(formula(m2)), str)[1]
 end
 
-@testitem "summaryma includes random effects only when randeff=true" tags = [:level2] begin
-    # summaryMA's `randeff` flag (default FALSE): the model-averaged random effects are
-    # printed only when randeff=true. Default output carries no random-effects section.
+@testitem "show always includes the model-averaged random effects" tags = [:level2] begin
+    # The random-effects block is always printed (no randeff toggle on Base.show), under the
+    # corrected "Model Averaged Random Effects" heading (summaryMA's copy-pasted "...Fixed
+    # Effects" label is an upstream bug, not transcribed; ADR-0007 decision 3).
     using MixedModels, Test
-    using cAIC: modelavg, summaryma
+    using cAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1242,21 +1253,19 @@ end
     )
     res = modelavg(m1, m2; weights=:smoothed)
 
-    str_default = sprint(summaryma, res)
-    @test !occursin("Random Effects", str_default)
-
-    str_re = sprint((io, r) -> summaryma(io, r; randeff=true), res)
-    @test occursin("Model Averaged Random Effects", str_re)
+    str = sprint(show, MIME("text/plain"), res)
+    @test occursin("Model Averaged Random Effects", str)
     # a representative random-effect coordinate (grouping, level, term) is rendered
     g, lev, term = first(res.raneff.keys)
-    @test occursin(lev, str_re)
+    @test occursin(lev, str)
 end
 
-@testitem "summaryma without an io prints to stdout and returns nothing" tags = [:level2] begin
-    # The convenience method summaryma(res) defaults io to stdout and returns nothing,
-    # so it is a pure side-effecting report (the cat-based summaryMA idiom).
+@testitem "show of a ModelAvgResult writes the full report to stdout" tags = [:level2] begin
+    # The text/plain show method writes to the (dynamically-bound) stdout — the path REPL
+    # auto-display ultimately routes through — and the candidate models + averaged fixed
+    # effects appear in the output.
     using MixedModels, Test
-    using cAIC: modelavg, summaryma
+    using cAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1276,13 +1285,13 @@ end
     res = modelavg(m1, m2; weights=:smoothed)
 
     mktemp() do _, tmpio
-        ret = redirect_stdout(tmpio) do
-            summaryma(res)
+        redirect_stdout(tmpio) do
+            show(stdout, MIME("text/plain"), res)
         end
-        @test ret === nothing
         flush(tmpio)
         seekstart(tmpio)
         captured = read(tmpio, String)
+        @test occursin("Candidate models", captured)
         @test occursin("Model Averaged Fixed Effects", captured)
     end
 end

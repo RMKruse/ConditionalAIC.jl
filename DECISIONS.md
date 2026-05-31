@@ -6,29 +6,39 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
-## 2026-05-31 — `summaryma` display divergences from `summaryMA`: candidate formulas in place of `z$call`; corrected random-effects heading
+## 2026-05-31 — `summaryMA` folded into `ModelAvgResult`'s `Base.show` (no standalone `summaryma`); display divergences from `summaryMA`
 
-**Status:** accepted (display-only). Applies to `summaryma` (issue #53, M4.5; docs/math/0009 §5).
+**Status:** accepted (display-only). Applies to the `ModelAvgResult` display (M4.5; docs/math/0009 §5).
+Supersedes the earlier `summaryma`-as-a-function decision (issue #53): the standalone `summaryma`
+function and its export were **removed**, and the full report it produced is now the `text/plain`
+`Base.show` of `ModelAvgResult`. There is therefore no named `summaryMA` analogue in the public
+surface — a deliberate **parity divergence** (PARITY.md M4.5): the *functionality* (a complete
+model-averaging summary) is preserved and reached the idiomatic Julia way, by displaying the result;
+only the *named function* is gone. The report prints quantities (`fixeff`, `weights`, `caics`,
+`raneff`) already validated where they are computed, so it carries **no** R reference fixture.
 
-`summaryma([io=stdout,] res; randeff=false)` is the port of `cAIC4`'s `summaryMA`. It is a pure
-display function — it prints quantities (`fixeff`, `weights`, `raneff`) already validated where they
-are computed, so it carries **no** R reference fixture. Two cosmetic divergences are recorded here:
+Three display divergences are recorded here:
 
 1. **Candidate formulas in place of `z$call`.** `summaryMA` opens by printing `z$call` — the captured
    `modelAvg(...)` call. `ModelAvgResult` retains no call object (it stores the candidate models, not
-   the invocation), so `summaryma` prints each candidate's **formula** (`string(formula(mᵢ))`, public
+   the invocation), so the display prints each candidate's **formula** (`string(formula(mᵢ))`, public
    StatsAPI accessor) in input order under a "Candidate models:" heading. This is strictly more
    informative for a reader than a reconstructed call and needs no field we do not already hold.
 
-2. **Corrected random-effects heading.** With `randeff = TRUE`, `summaryMA` prints the averaged random
-   effects under a heading that reads `"Model Averaged Fixed Effects:"` — a copy-paste of the
-   fixed-effects label (`R/summaryMA.R:45`), plainly an upstream bug. `summaryma` prints the correct
+2. **Corrected random-effects heading.** `summaryMA` prints the averaged random effects under a
+   heading that reads `"Model Averaged Fixed Effects:"` — a copy-paste of the fixed-effects label
+   (`R/summaryMA.R:45`), plainly an upstream bug. The display prints the correct
    `"Model Averaged Random Effects:"`. Consistent with ADR-0007 decision 3 (faithful to the algorithm,
    not to a bug), the defect is not transcribed.
 
-The candidate weights are printed `round(·; digits = 6)`, matching `summaryMA`'s
-`round(o$weights, digits = 6)`. The default REPL view of a `ModelAvgResult` remains the compact
-`Base.show` method (landed #49), distinct from this fuller, opt-in report.
+3. **No `randeff` toggle; random effects always printed.** `summaryMA` gates the random-effects block
+   behind a `randeff = FALSE` argument. A `Base.show(::MIME"text/plain")` method takes no such kwarg,
+   so the display always prints the full report, including the averaged random effects. The raw
+   `raneff`/`fixeff`/`weights` remain available as `ModelAvgResult` fields for programmatic use.
+
+The display also adds a per-candidate **cAIC column** alongside the weights (extending `summaryMA`'s
+weights-only listing); the candidate weights are printed `round(·; digits = 6)`, matching `summaryMA`'s
+`round(o$weights, digits = 6)`.
 
 ---
 
