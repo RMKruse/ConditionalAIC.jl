@@ -1,5 +1,8 @@
 # ConditionalAIC.jl
 
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://RMKruse.github.io/ConditionalAIC.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://RMKruse.github.io/ConditionalAIC.jl/dev)
+
 Conditional Akaike Information Criterion and conditional model selection for
 mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl).
 

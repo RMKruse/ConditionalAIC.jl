@@ -47,7 +47,7 @@ product first. `A` is `m×n` and `B` is `n×m`; the empty contraction returns ze
 # Example
 ```jldoctest
 julia> ConditionalAIC.Numerics.traceprod([1.0 2.0; 3.0 4.0], [5.0 6.0; 7.0 8.0])
-70.0
+69.0
 ```
 """
 function traceprod(A::AbstractMatrix, B::AbstractMatrix)
@@ -96,8 +96,8 @@ an existing factor without refactorising (§9).
 
 # Example
 ```jldoctest
-julia> ConditionalAIC.Numerics.logdetpd([4.0 1.0; 1.0 3.0])
-2.3978952727983707
+julia> ConditionalAIC.Numerics.logdetpd([4.0 1.0; 1.0 3.0]) ≈ log(11)  # log(det) of a 2×2
+true
 ```
 """
 # Cholesky factor of a symmetric positive-definite `A`, or a loud failure: a
@@ -147,8 +147,8 @@ refactorising (§9).
 
 # Example
 ```jldoctest
-julia> ConditionalAIC.Numerics.invquad([4.0 0.0; 0.0 2.0], [2.0, 2.0])
-3.0
+julia> ConditionalAIC.Numerics.invquad([4.0 0.0; 0.0 2.0], [2.0, 2.0]) ≈ 2^2 / 4 + 2^2 / 2
+true
 ```
 """
 invquad(A::AbstractMatrix, x::AbstractVector) = invquad(_cholpd(A, "invquad"), x)

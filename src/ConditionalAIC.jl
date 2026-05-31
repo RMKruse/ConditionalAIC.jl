@@ -63,12 +63,8 @@ include("averaging.jl")      # modelavg — cAIC-weighted model averaging (M4.5)
 # implemented in `comparison.jl`. `stepcaic` (M4 search) is implemented in `stepcaic.jl`.
 # See CONTEXT.md for the Scoring / Comparison / Search vocabulary.
 
-"""
-    anocaic(m::LinearMixedModel, rest::LinearMixedModel...; kwargs...) -> AnocaicTable
-
-Rank a user-supplied set of fitted models by conditional AIC (port of `cAIC4`'s
-`anocAIC`). See [`comparison.jl`] for the full signature and examples.
-"""
+# Forward declaration so `anocaic` is exportable here; the method and its canonical
+# docstring live in `comparison.jl`.
 function anocaic end
 
 export caic,

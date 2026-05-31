@@ -1,0 +1,12 @@
+[deps]
+ConditionalAIC = "abeed2a0-1958-478b-93f4-a1b8e265cb1f"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MixedModels = "ff71e718-51f3-5ec2-a782-8ffcbfa3c316"
+
+[compat]
+Documenter = "1"
+GLM = "=1.9.5"
+LinearAlgebra = "1"
+MixedModels = "=5.5.1"

@@ -17,7 +17,7 @@ scope:
   Binomial with `|unique(y)|>2` and any other canonical-link family. `B` conditional
   draws `y*(b) ~ f(μ̂)` directly from the conditional response distribution, each refitted;
   the link-scale covariance
-  penalty is [`DofLMM.efron_penalty`](@ref) with σ̂²=1.
+  penalty is [`DofLMM.efron_penalty`](@ref ConditionalAIC.DofLMM.efron_penalty) with σ̂²=1.
 
 Each route follows the same Level-1 / Level-2 isolation pattern as `DofLMM`:
 a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
@@ -104,9 +104,11 @@ decrement for the Poisson).
 # Example
 ```jldoctest
 julia> using ConditionalAIC: DofGLMM
+
 julia> c = DofGLMM.PoissonInfluenceComponents(
            [2.0, 0.0, 1.0], [1.0, 0.5, 1.5], [1, 3], [0.9, 1.4]
        );
+
 julia> DofGLMM.dof_glmm_poisson(c)  # 2*(1.0-0.9) + 1*(1.5-1.4) = 0.3
 0.30000000000000004
 ```
@@ -264,7 +266,7 @@ Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response
 distribution: `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
 the link-scale fitted values after refitting on `y^{(b)}` — one full GLMM refit per draw,
 via [`MMInternals.refitglmm_eta`](@ref). The bias-correction arithmetic is the shared
-[`DofLMM.efron_penalty`](@ref) kernel with σ=1.
+[`DofLMM.efron_penalty`](@ref ConditionalAIC.DofLMM.efron_penalty) kernel with σ=1.
 
 The ground-truth R function is `cAIC4::conditionalBootstrap`
 (`R/conditionalBootstrap.R`).

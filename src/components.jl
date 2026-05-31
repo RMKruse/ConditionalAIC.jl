@@ -9,7 +9,7 @@ This module performs the **construction** (the math of `docs/math/0002-gaussian-
 §3 and §6); it touches **no** `MixedModels` object — only the dense arrays the quarantine
 module [`ConditionalAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`, the per-reterm `Z`/`λ` blocks,
 and the `θ`-parametrisation map). It is therefore the fit-dependent bridge at
-**Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref), not
+**Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref ConditionalAIC.caic), not
 in Level-1 isolation.
 
 Every linear solve goes through a Cholesky factorisation; no explicit inverse and no `det`

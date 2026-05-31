@@ -214,7 +214,7 @@ end
 The Greven–Kneib bias-corrected effective degrees of freedom ρ with an **externally
 supplied** Hessian `B` — the port of `cAIC4::calculateGaussianBc(model, sigma.penalty,
 analytic = FALSE)`. This is the assembly behind the `:forwarddiff` and `:finitediff`
-B-sources of [`caic`](@ref): the curvature `B` of the (restricted) profile log-likelihood
+B-sources of [`caic`](@ref ConditionalAIC.caic): the curvature `B` of the (restricted) profile log-likelihood
 is obtained numerically rather than from the closed form, and only the cross-product `C`
 and the final ρ assembly are recomputed here.
 

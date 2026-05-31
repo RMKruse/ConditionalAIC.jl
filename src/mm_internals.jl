@@ -331,9 +331,9 @@ Each surviving reterm is rebuilt **fresh** (reusing the stored grouping `trm`/`r
 the returned model shares no mutable state with `m`. The fixed-effects term and formula
 are reused; refitting uses the reterms and feterm, not the (now stale) formula, so the
 reduced fit matches a native fit of the reduced model. The reduction may itself land on
-the boundary — the caller iterates ([`caic`](@ref) cascades until non-singular).
+the boundary — the caller iterates ([`caic`](@ref ConditionalAIC.caic) cascades until non-singular).
 
-Returns the refitted reduced [`LinearMixedModel`](@ref), or `nothing` when **every**
+Returns the refitted reduced `LinearMixedModel`, or `nothing` when **every**
 random-effect direction is on the boundary (no random-effects model remains — the caller
 falls back to the fixed-effects-only score, mirroring `cAIC4`'s `lm` branch).
 """
@@ -534,7 +534,7 @@ constructor, whose empty `sqrtwts` would otherwise produce a different working r
 Each surviving reterm is rebuilt **fresh** (via [`_subsetreterm`], `λ` reset to identity), so
 the returned model shares no mutable state with `m`.
 
-The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref)
+The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref ConditionalAIC.caic)
 cascades until non-singular). Returns `nothing` when **every** random-effect direction is on
 the boundary (no random-effects model remains — the caller falls back to the
 fixed-effects-only score ρ = rank(X), `docs/math/0006-glmm-bias-correction.md §5`), mirroring
