@@ -37,8 +37,9 @@ routine (ADR-0007).
 Where any source disagrees, **`cAIC4` is ground truth** (CLAUDE.md §2), *except* where `cAIC4`
 carries a provable defect (CLAUDE.md §1/§10), which §6 records with its disposition.
 
-Companion records: **ADR-0007** (faithful `solnp` transcription; the §9 `inv` carve-out; the
-"algorithm not bug" principle) and the DECISIONS.md entries dated 2026-05-31 (full-precision df;
+Companion records: **ADR-0007** (faithful `solnp` transcription; the "algorithm not bug" principle;
+its §9 `inv` carve-out was **withdrawn 2026-05-31** — line 154 is now a §9-compliant triangular
+solve, see DECISIONS 2026-05-31) and the DECISIONS.md entries dated 2026-05-31 (full-precision df;
 `predictma` `new_re_levels` default; the L1/L2 weight tolerances, measured at implementation).
 
 ---
@@ -128,9 +129,12 @@ Reproduce `R/weightOptim.R`:
   ratio test;
 - **BFGS Hessian update** (lines 116–124);
 - **the constrained search-direction solve** (lines 145–168): Cholesky `chol(hess + λ·D²)`
-  (line 146); **the §9 carve-out** — line 154 `solve(cz)` is kept as a *literal matrix inverse* of
-  the Cholesky factor (ADR-0007, decision 2), reused in the matmuls at lines 161/166; `qr.solve`
-  for the multiplier (line 163); and `λ ← 3λ` Levenberg ramp until the trial point is feasible;
+  (line 146); line 154 `solve(cz)` — `cAIC4` forms a *literal matrix inverse* of the Cholesky
+  factor and reuses it in the matmuls at lines 161/166, but the port transcribes this as
+  **§9-compliant triangular solves** against the factor (`cz' * v == cz_U' \ v`,
+  `cz * v == cz_U \ v` — algebraically exact, ADR-0007 decision 2 *withdrawn 2026-05-31*,
+  DECISIONS 2026-05-31); `qr.solve` for the multiplier (line 163); and `λ ← 3λ` Levenberg ramp
+  until the trial point is feasible;
 - **the three-point bisection line search** on the augmented Lagrangian (lines 178–245), with the
   `con1/con2/con3` interval updates and the reduction stop tests.
 
@@ -227,10 +231,11 @@ weights, and — when `randeff=true` — the averaged random effects. The defaul
    rounding-induced amount — *not* a bit-match. **Disposition:** recorded divergence (DECISIONS
    2026-05-31); neutralised at Level-1 (§7) by feeding *identical* df both sides; absorbed at
    Level-2 by the measured band.
-2. **Literal `inv` of the Cholesky factor (§9 carve-out).** `weightOptim.R:154` is kept as a literal
-   matrix inverse (ADR-0007 decision 2), the single documented exception to CLAUDE §9/§12, scoped to
-   this one line, justified by 1:1 source correspondence. **Disposition:** ADR-0007 + a prominent
-   in-code comment at the site.
+2. **`solve(cz)` at `weightOptim.R:154` (§9-compliant transcription).** `cAIC4` forms a literal
+   matrix inverse of the Cholesky factor; the port transcribes it as the algebraically-exact
+   triangular solves `cz' * v == cz_U' \ v` / `cz * v == cz_U \ v`, honouring CLAUDE §9/§12 with no
+   exceptions. ADR-0007 decision 2 (which had kept the literal `inv`) was **withdrawn 2026-05-31**.
+   **Disposition:** DECISIONS 2026-05-31 + an in-code comment at the site recording the equivalence.
 3. **`predictma` `new_re_levels` default.** Default `:error` overrides `MixedModels`' own `:missing`
    default, to mirror `cAIC4`/`lme4`'s `allow.new.levels = FALSE`. **Disposition:** recorded
    divergence (DECISIONS 2026-05-31); kwarg-exposed.

@@ -6,6 +6,219 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — `getweights` `inv` carve-out withdrawn: `weightOptim.R:154` transcribed as a §9-compliant triangular solve (supersedes ADR-0007 decision (2))
+
+**Status:** accepted. Reverses ADR-0007 decision (2), which had kept a literal `inv(cz_U)` of the
+Cholesky factor at the `solnp` inner step as a single documented carve-out from CLAUDE §9/§12.
+
+**What changed.** `src/averaging.jl`'s `getweights` no longer materialises the inverse Cholesky
+factor `cz = inv(cz_U)`. Each use of the inverse is rewritten as the equivalent triangular solve
+against the factor `cz_U = cholesky(hess + λ·D²).U`:
+
+```
+cz' * v  ==  cz_U' \ v        cz * v  ==  cz_U \ v
+```
+
+so `yg_kkt`, `A_kkt`, and the search step `u_step` are computed by triangular solves. The two
+former `try`-fallbacks (the `inv` and the surrounding `chol`) collapse to one; the warn-on-failure
+behaviour (ADR-0007 decision (4)) is preserved.
+
+**Why this is not a numerical-result divergence.** The substitution is algebraically exact —
+`inv(R)·v` and `R \ v` differ only by floating-point roundoff, and ADR-0007 decision (2) already
+recorded that the triangular solve "matches `cAIC4` to *the same* roundoff … gives up nothing
+measurable." Both the Level-1 optimizer fixture (`rtol = 1e-6, atol = 1e-10`) and the Level-2
+end-to-end anchor (weight `atol = 1e-2`, objective `rtol = 1e-4`) pass unchanged.
+
+**Why reverse the carve-out.** ADR-0007 kept the `inv` only to preserve a 1:1 line correspondence
+with `weightOptim.R:154`; it conceded the §9-compliant solve was equivalent. Removing the carve-out
+restores the §9/§12 ban on `inv` with **no exceptions** anywhere in the codebase. Source
+auditability is retained via an in-code comment at the site giving the `cz' * v == cz_U' \ v` /
+`cz * v == cz_U \ v` equivalence, so a maintainer can still map the step back to the R source.
+
+---
+
+## 2026-05-31 — Zhang-optimal weights (`getweights`/`_getweights_raw`): renormalize onto the unit simplex; `cAIC4` returns the raw `solnp` iterate
+
+**Status:** accepted (design). Applies to `_getweights_raw` (port of `cAIC4`'s `getWeights`),
+hence to both the `modelavg(...; weights=:zhang)` weight vector and `getweights`'s `WeightResult`.
+
+**What diverges.** The transcribed `solnp` SQP carries the simplex constraint `Σwᵢ = 1` as an
+**equality constraint inside the augmented-Lagrangian objective**, not as an algebraic identity.
+The outer loop drives `eqv = Σp − 1` toward zero and stops when `sqrt(tt² + eqv²) ≤ tol`
+(`tol = 1e-8`), so at convergence the raw iterate satisfies only `|Σp − 1| ≤ tol ≈ 1e-8` — and
+larger if the loop hits its `maxit = 400` cap without converging, or returns early through one of
+the ill-conditioned `@warn` fallbacks (entry 2026-05-31, *Ill-conditioned weight fallback*).
+`cAIC4`'s `getWeights`/`.weightOptim` returns this raw iterate **unnormalized**. `cAIC.jl`
+instead projects the final iterate onto the unit simplex (`p ./= sum(p)`) before returning, so the
+public weights sum to 1 to machine precision and the model-averaged effects `Σ wᵢ·θ̂ᵢ`
+(`_avgfixeff`/`_avgraneff`) are an **exact** convex combination rather than one carrying a
+≤ `1e-8` mass defect. The Buckland path (`:smoothed`) is unaffected — its `softmax` already sums
+to 1 to ~machine epsilon (entry 2026-05-31, *Model-averaging Buckland weights*).
+
+**Why this is not a numerical-result divergence.** The projection scales the converged weight
+vector by `1/Σp = 1/(1 ± 1e-8)`, an `O(1e-8)` relative shift — three to four orders of magnitude
+below the Level-2 weight band `atol = 1e-2` (entry 2026-05-31, *Level-2 end-to-end anchor*) and
+the Level-1 band `rtol = 1e-6, atol = 1e-10` (entry 2026-05-31, *Zhang-optimal weight optimizer*).
+Both fixtures still pass unchanged: the projection moves the weights and the objective by less than
+the fit-discrepancy and FP-non-associativity residuals those tolerances already absorb. The
+returned `objective` is **re-evaluated at the projected weights** (`j = find_weights(p)` after the
+divide) so `WeightResult.objective == find_weights(WeightResult.weights)` remains exactly
+consistent rather than reporting `J` at the pre-projection iterate.
+
+**Direction of the divergence.** This is the rare case where `cAIC.jl` is *more* constrained than
+`cAIC4`, not a relaxation: the API gains a hard "weights lie on the simplex" guarantee that
+`cAIC4` only approximates. CLAUDE §1 (mathematical correctness — averaging weights *are* a convex
+combination by definition) motivates it; it is recorded here because it is a deliberate,
+observable departure from the reference output. The `M = 1` short-circuit (`ŵ = (1)`) and the
+`:smoothed` path already satisfy the guarantee and are unchanged.
+
+**Fail-loud guard.** If the optimizer ever returns an iterate with `Σp ≤ 0` (gross
+non-convergence — every weight collapsed to ~0), the projection raises `DomainError` rather than
+dividing by a non-positive sum and emitting a silently-wrong weight vector (CLAUDE §4). On every
+converged or feasibility-restored iterate `Σp ≈ 1 > 0`, so this never fires in practice; it guards
+the pathological optimizer-failure path only.
+
+---
+
+## 2026-05-31 — Zhang-optimal weight optimizer (`getweights`/`_weightoptim`): Level-1 tolerance `rtol = 1e-6, atol = 1e-10`; full-precision df vs `cAIC4`'s `digits=2` rounding
+
+**Status:** accepted (measured — #50, M4.5). Applies to `getweights` and the
+`_getweights_raw`/`_weightoptim` inner optimizer (port of `cAIC4`'s `getWeights`/`.weightOptim`).
+
+**Level-1 isolation.** The Level-1 fixture (`test/fixtures/zhang_weights_level1.h5`,
+generated by `test/generate_fixtures_zhang_level1.R`) feeds **identical** synthetic
+`(y, mu, rho, sigma_sq)` directly into both `cAIC4`'s `.weightOptim` (R side) and
+`cAIC.jl`'s `_getweights_raw` (Julia side), bypassing any model fitting. Both sides
+start from the same inputs, so any deviation flags a transcription error, not a
+fit-discrepancy (CLAUDE §6, Level-1 isolation).
+
+**Observed agreement.** On both test cases (M=3, n=30 and M=2, n=20, orthogonalised
+well-conditioned `μᵀμ`, fixed seed) the final weight vectors and objective values
+agree to better than `rtol = 1e-6` and `atol = 1e-10`. The tight band confirms the
+faithful `solnp` transcription (ADR-0007).
+
+**Tolerance.** `rtol = 1e-6, atol = 1e-10` (the Level-1 target from `docs/math/0009 §7`).
+Not loosened: both sides run the **same SQP loop** on identical inputs, so the only
+source of discrepancy is floating-point non-associativity between R and Julia's
+linear algebra. The observed residual is well below the `rtol = 1e-6` ceiling.
+
+**Full-precision df divergence.** `cAIC4`'s `getWeights` reads the df vector from the
+`df` column of `anocAIC`, which rounds to `digits=2` (same rounding defect as the
+Buckland-weights path, DECISIONS 2026-05-31 above). `cAIC.jl` passes the
+**full-precision** `CAICResult.dof` (CLAUDE §1; `docs/math/0009 §6.1`). This is a
+documented, justified divergence from `cAIC4`'s rounding artifact; it cannot be
+tested end-to-end at the `rtol = 1e-6` Level-1 gate because the df inputs differ.
+
+**Level-2 end-to-end anchor (measured — #51, M4.5).** `test/fixtures/zhang_modelavg_level2.h5`
+generated by `test/generate_fixtures_modelavg_zhang.R` (cAIC4 1.1 + lme4 2.0.1) on a
+well-conditioned two-candidate set: `Reaction ~ 1 + Days + (1+Days|Subject)` (full slope)
+and `Reaction ~ 1 + (1|Subject)` (intercept-only, no Days FE). Different FE structure
+guarantees `MᵀM ≻ 0` — unique QP minimiser. R weights: `[0.9957, 0.0043]`.
+
+**Observed deviations** (MixedModels fit vs the R reference):
+- per-candidate cAIC: within the M2 Level-2 band (`atol = 1e-3`).
+- Zhang weight vector end-to-end: `|Δw|ₘₐₓ < 1e-2` (passes at `atol = 1e-2`). The dominant
+  term is the `digits=2` df rounding in `cAIC4`'s `getWeights`, shifted by the
+  `lme4`↔`MixedModels.jl` fit discrepancy.
+- Objective `J(ŵ)`: Julia `≈ 139997.97`, R `≈ 139999.01`, `|ΔJ| ≈ 1.04`,
+  `rtol ≈ 7.4e-6`. Both sides minimise over slightly different `(y, μ, ρ, σ̂²)` due
+  to different fits, so the objective values themselves differ at O(n · fit-discrepancy).
+
+**Tolerance.** Weight vector: `atol = 1e-2` (≈10× observed deviation; absorbs df-rounding
+perturbation per `docs/math/0009 §6.1`). Objective: `rtol = 1e-4` (≈13.5× observed
+relative deviation of `7.4e-6`; not loosened — the small relative discrepancy confirms
+the functional evaluates consistently, not that the optimizer disagrees).
+
+---
+
+## 2026-05-31 — Ill-conditioned weight fallback (`_weightoptim` `@warn`): unreachable from a natural collinear fit; locked in via a forced negative-definite Hessian
+
+**Status:** accepted (measured — #54, M4.5). Applies to the four `try`-error fallback
+branches of `_weightoptim` (the `chol`/`solve`/`qr.solve` failures of ADR-0007 decision 4)
+and to the edge-case hardening of `docs/math/0009 §2.3`.
+
+**The premise tested.** Issue #54 / `docs/math/0009 §2.3` describe duplicate or collinear
+candidates as the trigger for the ill-conditioned fallback: `MᵀM` singular ⇒ a `try`-error
+fires, the current iterate is returned, and a `@warn` is emitted. The acceptance criterion
+was worded as "a collinear/duplicate candidate fixture triggers the documented `@warn`."
+
+**The divergence (investigated, not papered over — CLAUDE §10).** On a *natural* fit the
+`@warn` branch does **not** fire. Fitting two identical `reaction ~ 1 + days + (1+days|subj)`
+sleepstudy candidates and running `modelavg(…; weights=:zhang)` converges cleanly to
+`ŵ = [0.5, 0.5]` with no warning. Two structural reasons, both inherent to the transcribed
+`solnp`:
+- With identical `μ` columns and `ρ₁ = ρ₂`, the residual `(y − μw)` is constant on the
+  simplex `Σw = 1` and the penalty `2σ̂²(ρᵀw)` is symmetric, so `J` is **flat** — the SQP
+  has no descent direction and stays at its symmetric start `w⁰ = (1/M, …, 1/M)`.
+- The search-direction Cholesky is taken on `hess + λ·D²` with the Levenberg ramp `λ ← 3λ`
+  running until the trial point is feasible (no iteration cap), so the regularised matrix is
+  driven positive-definite before `chol` can fail; and the equality Jacobian `a = 1ᵀ/scale`
+  is full column rank, so the KKT `qr.solve` does not fail either.
+
+The `@warn` paths are therefore **essentially unreachable from any real candidate set**. This
+matches `cAIC4`: the `solnp` fallbacks guard against pathological linear-algebra states that
+the regularisation otherwise prevents, not against collinear inputs per se.
+
+**What is tested instead.** The fallback `@warn` + valid-return contract is locked in at
+**Level-1** by feeding a synthetic **negative-definite Hessian** straight into `_weightoptim`
+(`hess = −I`, `λ = 0`), which forces `cholesky(Symmetric(hess))` to throw `PosDefException`
+on the first LM-ramp step — exercising the documented `@warn` + early-return branch
+(`@test_logs (:warn, r"Cholesky decomposition failed")`, finite returned `p`). The natural
+collinear case is tested for its **honest** behavior at **Level-2**: `modelavg(:zhang)` on
+duplicate candidates returns a simplex-valid weight with **no** warning
+(`@test_logs min_level = Logging.Warn`). `ŵ` itself is a valid but non-unique minimiser
+(many exist on the flat simplex); per `docs/math/0009 §7` the validated functionals are the
+stable quantities, not `ŵ`.
+
+**No tolerance / behavior change.** This is a documentation of reachability, not a divergence
+in any numerical value: the `@warn` text and the fallback return are exactly as transcribed
+from `cAIC4` (ADR-0007 decision 4).
+
+---
+
+## 2026-05-31 — Model-averaging Buckland weights (`modelavg`, `weights=:smoothed`): full-precision cAIC; Level-2 band `atol = 1e-3`
+
+**Status:** accepted (measured — #49, M4.5). Applies to `modelavg(...; weights=:smoothed)`,
+the Buckland (1997) smoothed-weights path (port of `cAIC4`'s `modelAvg(opt = FALSE)`;
+`docs/math/0009 §3`).
+
+**The divergence: 2-digit cAIC rounding feeding the weights.** `cAIC4`'s `modelAvg(opt=FALSE)`
+computes its weights from the `cAIC` column of `anocAIC` (`R/modelAvg.R:43–45`), and `anocAIC`
+**rounds** `cll`/`df`/`cAIC` to 2 digits (`round(unlist(...), digits = 2)`, `R/methods.R:63`).
+So R's smoothed weights `wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2)` are formed on **rounded** `cAICᵢ`. This is
+a print-formatting artifact leaking into numerics — the same class of defect recorded for the
+optimal-weight df (`docs/math/0009 §6.1`). `cAIC.jl` uses the **full-precision** per-candidate
+cAIC (CLAUDE §1: mathematical correctness; faithful to the algorithm, not to the rounding bug).
+
+**Reference fixture.** `test/fixtures/modelavg_level2.h5`, generated by
+`test/generate_fixtures_modelavg.R` (cAIC4 1.1 sourced from tree + lme4 2.0.1). Candidate set
+on `sleepstudy`, fitted ML: correlated random slope `(1 + Days | Subject)`, uncorrelated
+`(1 + Days || Subject)`, and intercept-only `(1 | Subject)` — RE structures chosen so the two
+slope models have **comparable** cAIC, giving a non-degenerate weight vector
+(`w ≈ (0.337, 0.663, 3.4e-13)`) that genuinely exercises the `exp(−Δ/2)` shape rather than a
+near-`{1,0}` vector. Stored: full-precision per-candidate `caic`, `modelAvg(opt=FALSE)`
+`weights`, and the averaged `fixeff`.
+
+**Observed deviations** (MixedModels fit vs the R reference):
+- per-candidate cAIC: `|Δcaic|ₘₐₓ = 2.96e-4` — within the M2 Level-2 band.
+- Buckland weights end-to-end: `|Δw|ₘₐₓ = 5.9e-4`, decomposing as the 2-digit cAIC rounding
+  (`|Δw| = 5.56e-4`, the dominant term, measured as `softmax(−cAIC_R^full/2)` vs R's
+  rounded-cAIC weights) plus the `lme4`↔`MixedModels` fit discrepancy (`3.5e-5`).
+- averaged fixed effects: `|Δfix|ₘₐₓ ≈ 1e-10` (the candidates' FE estimates are near-identical
+  and the weights robust).
+- the pure Buckland-formula isolation `modelavg.weights` vs `softmax(−cAIC_R^full/2)` is
+  `3.5e-5` — confirming the weight *formula* matches `cAIC4` exactly on identical inputs, and
+  that the 5.9e-4 end-to-end gap is entirely the rounding + fit discrepancy.
+
+**Tolerance.** `atol = 1e-3` on the weights and the averaged fixed effects, ≈1.7× the observed
+`5.9e-4`. Not a loosened tolerance (CLAUDE §10): the Buckland map is deterministic in the
+already-M2-validated cAICs (`docs/math/0009 §7`), so it inherits the M2 band; a genuine
+weight-formula error (wrong sign, missing `/2`, un-normalised) shifts a weight by `O(0.1–1)`,
+two-to-three orders of magnitude above this band. The weight vector is anchored on this
+deliberately well-conditioned, non-collinear candidate set per `docs/math/0009 §7`.
+
+---
+
 ## 2026-05-31 — `stepcaic` `skipnonconverged`: convergence signal is the optimizer return code, not `lme4`'s gradient/Hessian check; no Level-2 fixture
 
 **Status:** accepted (design — #43). Milestone M4; option `skipnonconverged` (the `cAIC4`

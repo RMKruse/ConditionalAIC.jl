@@ -85,7 +85,9 @@ end
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
     data = MixedModels.dataset(:pastes)
-    m = fit(MixedModel, @formula(strength ~ 1 + (1 | batch)), data; REML=false, progress=false)
+    m = fit(
+        MixedModel, @formula(strength ~ 1 + (1 | batch)), data; REML=false, progress=false
+    )
 
     # cAIC4's decision: forward with groupCandidate `cask` scores the crossed model
     # `(1|batch)+(1|cask)`, but it does NOT lower the cAIC → reject, keep `(1|batch)`. Provenance:
@@ -205,7 +207,9 @@ end
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
     data = MixedModels.dataset(:pastes)
-    m = fit(MixedModel, @formula(strength ~ 1 + (1 | batch)), data; REML=false, progress=false)
+    m = fit(
+        MixedModel, @formula(strength ~ 1 + (1 | batch)), data; REML=false, progress=false
+    )
 
     # `direction = :both` from `(1|batch)`, groupCandidate `cask`. Forward turn (add cask) does not
     # improve → branch F flips to backward → the lm terminal `strength~1` does not improve →

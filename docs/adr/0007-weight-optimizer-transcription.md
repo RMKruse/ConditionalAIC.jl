@@ -1,7 +1,10 @@
 # ADR-0007 — M4.5 weight optimizer: faithful `solnp` transcription over a direct convex-QP solve
 
 **Date:** 2026-05-31
-**Status:** Accepted (design — grilled, not yet built)
+**Status:** Accepted (design — grilled, not yet built). **Decision (2) superseded 2026-05-31**
+— the literal `inv` carve-out was reversed; the `inv` at `weightOptim.R:154` is now transcribed as
+the provably-equivalent, §9-compliant triangular solve. See the amendment under Decision (2) and
+DECISIONS (2026-05-31).
 
 ## Context
 
@@ -43,7 +46,7 @@ The objective is identical in every option below — only *how it is minimised* 
    forces a future maintainer to re-derive the equivalence. No new runtime dependency is incurred
    (`LinearAlgebra` only).
 
-2. **Keep the explicit `inv` of the Cholesky factor (line 154) literally** — a *documented,
+2. ~~**Keep the explicit `inv` of the Cholesky factor (line 154) literally** — a *documented,
    deliberate carve-out from §9/§12 for this one line*. Rationale: it preserves the 1:1
    transcription that is the whole basis of decision (1). The alternative (a provably-equivalent
    triangular solve `R \ v`) was considered and **rejected**: cross-language bit-parity is
@@ -51,7 +54,18 @@ The objective is identical in every option below — only *how it is minimised* 
    the triangular solve would match `cAIC4` to *the same* roundoff while honouring §9 — i.e. it
    gives up nothing measurable — but it was judged not worth the break in source correspondence.
    This carve-out is **scoped to this single line** of this single function; the §9 ban on `inv`
-   stands everywhere else in the codebase.
+   stands everywhere else in the codebase.~~
+
+   > **SUPERSEDED 2026-05-31.** The carve-out is withdrawn. `inv(cz_U)` is replaced by the
+   > provably-equivalent triangular solves `cz' * v == cz_U' \ v` and `cz * v == cz_U \ v` at each
+   > use site in `getweights` (`src/averaging.jl`). As decision (2) itself recorded, this "gives up
+   > nothing measurable" — it matches `cAIC4` to the *same* roundoff — so numerical parity is
+   > unaffected; what changes is that the §9/§12 ban on `inv` now holds with **no exceptions** across
+   > the codebase. The minor cost acknowledged in decision (1) (the inverse step no longer maps 1:1
+   > onto `weightOptim.R:154`) is paid down by an in-code comment at the site giving the algebraic
+   > equivalence, so the source correspondence remains auditable. Decision (1) (faithful `solnp`
+   > transcription), decision (3) (full-precision df), and decision (4) (warn-on-fallback) are
+   > unchanged.
 
 3. **Transcribe the algorithm faithfully, but do not transcribe upstream *defects*.** `cAIC4` feeds
    the optimizer `df` rounded to two decimals (an `anocAIC` print-formatting artifact leaking into
@@ -72,9 +86,10 @@ The objective is identical in every option below — only *how it is minimised* 
 - **No new dependency**; `src/mm_internals.jl` is untouched (`getWeights` reads `response`,
   `fitted`/conditional μ, `sigma`, and the effective df from `caic`/`anocaic` — public API, not
   internals). The internal-access table is unchanged.
-- **The §9 carve-out is real and must stay visible.** The transcription carries a prominent comment
-  at the `inv` site pointing here, so a future reader does not "fix" it (or read it as licence to
-  use `inv` elsewhere). A `JET`/lint exception, if any is needed, is localised to this function.
+- ~~**The §9 carve-out is real and must stay visible.**~~ *(Superseded — see Decision (2).)* There
+  is no longer a §9 carve-out: the site uses triangular solves, and the in-code comment now records
+  the algebraic equivalence to `weightOptim.R:154` (`cz' * v == cz_U' \ v`, `cz * v == cz_U \ v`)
+  rather than warning against a "fix". No `JET`/lint exception is required.
 - **Validation cannot be bit-match.** The optimizer transcription is gated at **Level-1** on shared
   synthetic inputs `(y, μ, ρ, σ²)` against `cAIC4`'s `getWeights`/`.weightOptim` arithmetic — feeding
   *identical* df both sides isolates the transcription from the full-precision-df divergence (3).
