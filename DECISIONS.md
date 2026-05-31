@@ -57,6 +57,51 @@ the functional evaluates consistently, not that the optimizer disagrees).
 
 ---
 
+## 2026-05-31 — Ill-conditioned weight fallback (`_weightoptim` `@warn`): unreachable from a natural collinear fit; locked in via a forced negative-definite Hessian
+
+**Status:** accepted (measured — #54, M4.5). Applies to the four `try`-error fallback
+branches of `_weightoptim` (the `chol`/`solve`/`qr.solve` failures of ADR-0007 decision 4)
+and to the edge-case hardening of `docs/math/0009 §2.3`.
+
+**The premise tested.** Issue #54 / `docs/math/0009 §2.3` describe duplicate or collinear
+candidates as the trigger for the ill-conditioned fallback: `MᵀM` singular ⇒ a `try`-error
+fires, the current iterate is returned, and a `@warn` is emitted. The acceptance criterion
+was worded as "a collinear/duplicate candidate fixture triggers the documented `@warn`."
+
+**The divergence (investigated, not papered over — CLAUDE §10).** On a *natural* fit the
+`@warn` branch does **not** fire. Fitting two identical `reaction ~ 1 + days + (1+days|subj)`
+sleepstudy candidates and running `modelavg(…; weights=:zhang)` converges cleanly to
+`ŵ = [0.5, 0.5]` with no warning. Two structural reasons, both inherent to the transcribed
+`solnp`:
+- With identical `μ` columns and `ρ₁ = ρ₂`, the residual `(y − μw)` is constant on the
+  simplex `Σw = 1` and the penalty `2σ̂²(ρᵀw)` is symmetric, so `J` is **flat** — the SQP
+  has no descent direction and stays at its symmetric start `w⁰ = (1/M, …, 1/M)`.
+- The search-direction Cholesky is taken on `hess + λ·D²` with the Levenberg ramp `λ ← 3λ`
+  running until the trial point is feasible (no iteration cap), so the regularised matrix is
+  driven positive-definite before `chol` can fail; and the equality Jacobian `a = 1ᵀ/scale`
+  is full column rank, so the KKT `qr.solve` does not fail either.
+
+The `@warn` paths are therefore **essentially unreachable from any real candidate set**. This
+matches `cAIC4`: the `solnp` fallbacks guard against pathological linear-algebra states that
+the regularisation otherwise prevents, not against collinear inputs per se.
+
+**What is tested instead.** The fallback `@warn` + valid-return contract is locked in at
+**Level-1** by feeding a synthetic **negative-definite Hessian** straight into `_weightoptim`
+(`hess = −I`, `λ = 0`), which forces `cholesky(Symmetric(hess))` to throw `PosDefException`
+on the first LM-ramp step — exercising the documented `@warn` + early-return branch
+(`@test_logs (:warn, r"Cholesky decomposition failed")`, finite returned `p`). The natural
+collinear case is tested for its **honest** behavior at **Level-2**: `modelavg(:zhang)` on
+duplicate candidates returns a simplex-valid weight with **no** warning
+(`@test_logs min_level = Logging.Warn`). `ŵ` itself is a valid but non-unique minimiser
+(many exist on the flat simplex); per `docs/math/0009 §7` the validated functionals are the
+stable quantities, not `ŵ`.
+
+**No tolerance / behavior change.** This is a documentation of reachability, not a divergence
+in any numerical value: the `@warn` text and the fallback return are exactly as transcribed
+from `cAIC4` (ADR-0007 decision 4).
+
+---
+
 ## 2026-05-31 — Model-averaging Buckland weights (`modelavg`, `weights=:smoothed`): full-precision cAIC; Level-2 band `atol = 1e-3`
 
 **Status:** accepted (measured — #49, M4.5). Applies to `modelavg(...; weights=:smoothed)`,

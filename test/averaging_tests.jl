@@ -481,8 +481,20 @@ end
     using cAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
-    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
-    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
 
     res = modelavg(m1, m2)
     @test res isa ModelAvgResult{Float64}
@@ -500,8 +512,20 @@ end
     using cAIC: modelavg, ModelAvgResult, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
-    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
-    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
 
     res_zhang = modelavg(m1, m2; weights=:zhang)
     @test hasproperty(res_zhang, :weightresult)
@@ -521,8 +545,20 @@ end
     using cAIC: modelavg, getweights, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
-    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
-    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
 
     res = modelavg(m1, m2; weights=:zhang)
     wr = getweights(res)
@@ -532,7 +568,7 @@ end
 end
 
 @testitem "modelavg Zhang Level-2: optimal weights match cAIC4 modelAvg(opt=TRUE) on well-conditioned set" tags = [
-    :level2,
+    :level2
 ] begin
     # Level-2 anchor (docs/math/0009 §7, ADR-0007): fits a WELL-CONDITIONED candidate set
     # (reaction ~ days FE present vs absent → genuinely different conditional means →
@@ -559,9 +595,9 @@ end
     fixture = joinpath(@__DIR__, "fixtures", "zhang_modelavg_level2.h5")
     @test isfile(fixture)
     h5open(fixture, "r") do f
-        Rcaic    = read(f["caic"])      # full-precision cAIC4 cAIC, input order
+        Rcaic = read(f["caic"])      # full-precision cAIC4 cAIC, input order
         Rweights = read(f["weights"])   # modelAvg(opt=TRUE) weights, input order
-        Robj     = asscalar(read(f["objective"]))  # J(ŵ) from cAIC4
+        Robj = asscalar(read(f["objective"]))  # J(ŵ) from cAIC4
 
         # per-candidate cAIC within M2 band
         for i in eachindex(Rcaic)
@@ -579,7 +615,7 @@ end
 # ── M4.5 issue #54: edge-case hardening ─────────────────────────────────────────────────
 
 @testitem "modelavg M=1 :zhang short-circuit: single model returns weights=[1.0] (Level-2)" tags = [
-    :level2,
+    :level2
 ] begin
     # docs/math/0009 §2.3: a single candidate is the trivially unique minimiser — _getweights_raw
     # hits the nw==1 branch and returns ŵ=(1), J=(y−μ₁)ᵀ(y−μ₁)+2σ̂²ρ₁, skipping the SQP.
@@ -614,7 +650,7 @@ end
 end
 
 @testitem "modelavg M=1 :smoothed short-circuit: single model returns weights=[1.0] (Level-2)" tags = [
-    :level2,
+    :level2
 ] begin
     # _bucklandweights([c]) = exp(0)/1 = [1.0]: the Δᵢ=0 term gives weight 1 to the sole
     # candidate regardless of its absolute cAIC value.
@@ -640,7 +676,7 @@ end
 end
 
 @testitem "_weightoptim with negative-definite Hessian emits @warn and returns valid fallback (Level-1)" tags = [
-    :level1,
+    :level1
 ] begin
     # Regression guard for the ill-conditioned fallback paths (averaging.jl). A negative-
     # definite Hessian with lambda=0 forces cholesky(Symmetric(hess)) to throw PosDefException
@@ -651,13 +687,13 @@ end
 
     T = Float64
     nw = 2
-    y        = T[1.0, 2.0, 3.0]
-    mu_mat   = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
-    rho_v    = T[2.5, 3.0]
+    y = T[1.0, 2.0, 3.0]
+    mu_mat = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
+    rho_v = T[2.5, 3.0]
     sigma_sq = T(1.2)
-    equB     = one(T)
-    lowb     = zeros(T, nw)
-    uppb     = ones(T, nw)
+    equB = one(T)
+    lowb = zeros(T, nw)
+    uppb = ones(T, nw)
 
     find_weights = let y = y, mu = mu_mat, σ² = sigma_sq, ρ = rho_v
         w -> let r = y .- mu * w
@@ -665,13 +701,13 @@ end
         end
     end
 
-    w0       = fill(one(T) / nw, nw)
-    funv     = find_weights(w0)
-    eqv      = sum(w0) - equB                   # = 0.0 (feasible start)
-    tol      = T(1e-8)
-    sc1      = min(max(abs(funv), tol), one(T) / tol)
-    sc2      = min(max(abs(eqv), tol), one(T) / tol)
-    scaler   = vcat(T[sc1, sc2], ones(T, nw))
+    w0 = fill(one(T) / nw, nw)
+    funv = find_weights(w0)
+    eqv = sum(w0) - equB                   # = 0.0 (feasible start)
+    tol = T(1e-8)
+    sc1 = min(max(abs(funv), tol), one(T) / tol)
+    sc2 = min(max(abs(eqv), tol), one(T) / tol)
+    scaler = vcat(T[sc1, sc2], ones(T, nw))
 
     # Negative-definite Hessian: cholesky(Symmetric(-I + 0·D)) throws immediately
     hess_nd = -Matrix{T}(I, nw, nw)
@@ -683,7 +719,9 @@ end
     @test all(isfinite, res.p)
 end
 
-@testitem "_bucklandweights with uniform cAIC gives uniform weights (Level-1)" tags = [:level1] begin
+@testitem "_bucklandweights with uniform cAIC gives uniform weights (Level-1)" tags = [
+    :level1
+] begin
     # When all candidates carry the same cAIC, Δᵢ=0 for every i, so wᵢ=1/M (maximum
     # entropy). The log-space computation must not introduce rounding asymmetries.
     using cAIC: cAIC
@@ -697,16 +735,16 @@ end
 end
 
 @testitem "_getweights_raw with all-zero rho: penalty vanishes, returns valid WeightResult (Level-1)" tags = [
-    :level1,
+    :level1
 ] begin
     # When every ρᵢ=0, the penalty 2σ²(ρᵀw)=0 regardless of w and the Mallows criterion
     # reduces to pure RSS minimisation. The optimizer must still converge to a weight vector
     # on the unit simplex (non-negative, sum=1) with a finite, non-negative objective.
     using cAIC: cAIC
 
-    T   = Float64
-    y   = T[1.0, 2.0, 3.0]
-    mu  = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
+    T = Float64
+    y = T[1.0, 2.0, 3.0]
+    mu = T[1.5 1.4; 2.0 2.1; 2.8 2.9]
     rho = zeros(T, 2)           # all-zero effective-df: penalty term drops out
     sigma_sq = T(1.2)
 
@@ -718,6 +756,85 @@ end
     @test sum(res.weights) ≈ 1.0 atol = 1e-8
     @test isfinite(res.objective)
     @test res.objective ≥ 0
+end
+
+@testitem "modelavg :zhang on duplicate (collinear) candidates converges cleanly to a simplex-valid weight (Level-2)" tags = [
+    :level2
+] begin
+    # docs/math/0009 §2.3 / ADR-0007 decision 4 say duplicate/collinear candidates make MᵀM
+    # singular so a try-error fallback *may* fire (warned). Empirically, on a natural fit it
+    # does NOT: with identical μ columns and ρ₁=ρ₂ the residual (y−μw) is constant on the
+    # simplex and the penalty is symmetric, so J is flat — the SQP stays at its w⁰=(1/M,…)
+    # start, and the Levenberg ramp (hess+λ·D², λ×3) keeps the Cholesky PD throughout. The
+    # @warn fallback is thus unreachable from a real collinear fit; it is locked in separately
+    # at Level-1 by forcing a negative-definite Hessian (DECISIONS 2026-05-31). This test pins
+    # the honest end-to-end behavior: a simplex-valid weight is returned with NO warning fired.
+    using MixedModels, Test, Logging
+    using cAIC: modelavg, ModelAvgResult, WeightResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    f = @formula(reaction ~ 1 + days + (1 + days | subj))
+    m1 = fit(MixedModel, f, data; REML=false, progress=false)
+    m2 = fit(MixedModel, f, data; REML=false, progress=false)   # identical fit ⇒ collinear μ
+
+    # No ill-conditioned fallback @warn is emitted on the natural collinear set.
+    res = @test_logs min_level = Logging.Warn modelavg(m1, m2; weights=:zhang)
+
+    @test res isa ModelAvgResult{Float64}
+    @test res.weighttype == :zhang
+    @test length(res.weights) == 2
+    @test all(≥(-1e-10), res.weights)          # non-negative
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8    # on the unit simplex
+    # The flat objective ⇒ the optimizer returns its symmetric start (one valid, non-unique
+    # minimiser of the many on the simplex); §7 anchors stable functionals, not ŵ itself.
+    @test res.weights ≈ [0.5, 0.5] atol = 1e-6
+    @test res.weightresult isa WeightResult{Float64}
+    @test isfinite(res.weightresult.objective)
+    @test res.weightresult.objective ≥ 0
+end
+
+@testitem "modelavg rejects an unknown weights= scheme with ArgumentError (Level-2)" tags = [
+    :level2
+] begin
+    # Degenerate-input guard (CLAUDE §4 fail-loud): only :zhang and :smoothed are supported
+    # weight schemes. Any other symbol must raise ArgumentError, not silently fall through.
+    using MixedModels, Test
+    using cAIC: modelavg
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    @test_throws ArgumentError modelavg(m1; weights=:bogus)
+    @test_throws ArgumentError modelavg(m1; weights=:optimal)   # plausible-but-wrong name
+end
+
+@testitem "modelavg is type-stable on the M=1 :zhang degenerate path (Level-2)" tags = [
+    :level2
+] begin
+    # Acceptance criterion 4 (#54): @inferred type-stability is preserved on the degenerate
+    # branch. M=1 routes through the nw==1 short-circuit in _getweights_raw, a different code
+    # path than the M≥2 optimizer; it must still infer to a concrete ModelAvgResult{Float64}.
+    using MixedModels, Test
+    using cAIC: modelavg, ModelAvgResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res = @inferred ModelAvgResult{Float64} modelavg(m1; weights=:zhang)
+    @test res isa ModelAvgResult{Float64}
+    @test res.weights ≈ [1.0]
 end
 
 @testitem "live R re-validation of the modelavg Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
