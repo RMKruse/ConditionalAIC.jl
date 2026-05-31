@@ -18,6 +18,11 @@ routine (ADR-0007).
 > (divergences) and §7 (validation) are fixed. §2 (the `solnp` transcription) pins the *contract*
 > and the deviations; the line-by-line correspondence to `weightOptim.R` is filled as the
 > transcription is written under TDD (CLAUDE.md §7). Do not implement ahead of a filled section.
+> **§5 `predictma` landed (#52):** weighted conditional prediction `ŷ^MA = Σ wᵢ predict(mᵢ, D*)`,
+> `new_re_levels` default `:error` (mirrors `allow.new.levels = FALSE`); Level-2 stable-functional
+> anchor vs `cAIC4::predictMA` on the well-conditioned **and** nested sleepstudy sets
+> (`predictma_level2.h5`; per-observation `atol = 5e-3`, DECISIONS 2026-05-31). `summaryma`
+> remains the only `cAIC4` averaging surface still pending.
 
 **Ground-truth sources** (read from source, not memory — memory record *verify-caic4-against-source*):
 - `cAIC4` **v1.1**: `R/modelAvg.R`, `R/predictMA.R`, `R/summaryMA.R`, `R/getWeights.R`,

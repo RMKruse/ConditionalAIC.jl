@@ -841,6 +841,259 @@ end
     @test res.weights ≈ [1.0]
 end
 
+# ── M4.5 issue #52: predictma — weighted conditional prediction ─────────────────────────
+
+@testitem "predictma weight-combines per-candidate conditional predictions (tracer)" tags = [
+    :level2
+] begin
+    # Tracer (CLAUDE §7 step 3): the model-averaged prediction on the TRAINING data is the
+    # weighted sum of each candidate's conditional prediction, ŷ^MA = Σ wᵢ predict(mᵢ, D*)
+    # (docs/math/0009 §5; port of cAIC4's `w %*% t(sapply(models, predict, newdata))`).
+    using MixedModels
+    using cAIC: modelavg, predictma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    res = modelavg(m1, m2; weights=:smoothed)
+    yhat = predictma(res, data)
+
+    @test yhat isa Vector{Float64}
+    @test length(yhat) == length(data.reaction)
+
+    w = res.weights
+    expected = w[1] .* predict(m1, data) .+ w[2] .* predict(m2, data)
+    @test yhat ≈ expected
+end
+
+@testitem "predictma default new_re_levels=:error raises on an unseen grouping level" tags = [
+    :level2
+] begin
+    # docs/math/0009 §5/§6.3: the default new_re_levels=:error mirrors lme4's
+    # allow.new.levels=FALSE — a grouping level absent from training raises ArgumentError
+    # (overriding MixedModels' own :missing default). The error originates in
+    # MixedModels.predict and propagates through the weighted combination.
+    using MixedModels
+    using cAIC: modelavg, predictma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    # a row carrying a subject level never seen in sleepstudy
+    newdata = (reaction=[300.0], days=[3.0], subj=["BRAND_NEW_SUBJ"])
+    @test_throws ArgumentError predictma(res, newdata)
+    # explicit :error is identical to the default
+    @test_throws ArgumentError predictma(res, newdata; new_re_levels=:error)
+end
+
+@testitem "predictma new_re_levels=:population forwards through to a population prediction" tags = [
+    :level2
+] begin
+    # docs/math/0009 §5: the opt-in new_re_levels=:population treats an unseen grouping
+    # level's random effect as 0, so the model-averaged prediction on a brand-new subject is
+    # the weighted combination of each candidate's population (fixed-effects-only for that row)
+    # prediction — and must NOT error.
+    using MixedModels
+    using cAIC: modelavg, predictma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    newdata = (reaction=[300.0], days=[3.0], subj=["BRAND_NEW_SUBJ"])
+    yhat = predictma(res, newdata; new_re_levels=:population)
+
+    @test yhat isa Vector{Float64}
+    @test length(yhat) == 1
+    w = res.weights
+    expected =
+        w[1] .* predict(m1, newdata; new_re_levels=:population) .+
+        w[2] .* predict(m2, newdata; new_re_levels=:population)
+    @test yhat ≈ expected
+    # population prediction for a new subject = fixed effects only (RE = 0). For m1/m2 the
+    # FE are (Intercept)+days, so the per-candidate value is β̂₀ + β̂₁·3; verify it is finite
+    # and not accidentally NaN/missing-poisoned.
+    @test all(isfinite, yhat)
+end
+
+@testitem "predictma is type-stable (CLAUDE §8)" tags = [:level2] begin
+    # The weighted-combination loop must infer to a concrete Vector{Float64} despite
+    # MixedModels.predict's new_re_levels-dependent return type (constant-propagated default
+    # :error keeps the eltype Float64, not Union{Float64,Missing}).
+    using MixedModels, Test
+    using cAIC: modelavg, predictma
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    res = modelavg(m1, m2; weights=:smoothed)
+
+    yhat = @inferred Vector{Float64} predictma(res, data)
+    @test yhat isa Vector{Float64}
+end
+
+@testitem "predictma Level-2: ŷ^MA matches cAIC4 predictMA on well-conditioned + nested sets" tags = [
+    :level2
+] begin
+    # Level-2 stable-functional anchor (docs/math/0009 §5/§7, issue #52): the model-averaged
+    # PREDICTION ŷ^MA = Σ wᵢ predict(mᵢ, D*) is the functional anchored on EVERY scenario,
+    # including the nested set — it is stable under a non-unique weight vector (the M4.5
+    # analogue of stepcaic's path-only-on-well-separated-cases rule). The fixture is written by
+    # generate_fixtures_predictma.R (cAIC4 modelAvg(opt=TRUE) + predictMA); no R runs here.
+    #
+    # Two scenarios, both predicting on the TRAINING data (every level seen → :error path):
+    #   wc      — well-conditioned, distinct FE (MᵀM ≻ 0): anchor BOTH the prediction and the
+    #             weight vector (the minimiser is unique).
+    #   nested  — three nested candidates (Orthodont-style): anchor ONLY the prediction (the
+    #             stable functional); the weight vector is not pinned (§7 discipline).
+    #
+    # Band atol = 5e-3 (~3× the measured worst-case |Δŷ^MA| = 1.63e-3, driven by the lme4↔MM
+    # fit discrepancy on the response scale; DECISIONS 2026-05-31). A wrong combination shifts
+    # predictions by O(1)+ ms — orders of magnitude above this band.
+    using MixedModels, HDF5
+    using cAIC: modelavg, predictma
+
+    L2_ATOL_PRED = 5e-3
+    L2_ATOL_CAIC = 1e-3
+    L2_ATOL_W = 1e-2
+
+    data = MixedModels.dataset(:sleepstudy)
+    fixture = joinpath(@__DIR__, "fixtures", "predictma_level2.h5")
+    @test isfile(fixture)
+
+    # ── Scenario wc: well-conditioned, anchor prediction AND weights ──────────────────────
+    wc_forms = [
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        @formula(reaction ~ 1 + (1 | subj)),
+    ]
+    wc_ms = [fit(MixedModel, f, data; REML=false, progress=false) for f in wc_forms]
+    wc_res = modelavg(wc_ms...)   # default :zhang
+    wc_pred = predictma(wc_res, data)
+
+    h5open(fixture, "r") do f
+        Rcaic = read(f["wc/caic"])
+        Rweights = read(f["wc/weights"])
+        Rpred = read(f["wc/prediction"])
+
+        for i in eachindex(Rcaic)
+            @test wc_res.caics[i] ≈ Rcaic[i] atol = L2_ATOL_CAIC
+        end
+        @test wc_res.weights ≈ Rweights atol = L2_ATOL_W
+        @test length(wc_pred) == length(Rpred)
+        # per-observation band (elementwise), not the aggregated L2 norm over n = 180
+        @test maximum(abs.(wc_pred .- Rpred)) <= L2_ATOL_PRED
+    end
+
+    # ── Scenario nested: anchor the prediction (stable functional) only ───────────────────
+    nested_forms = [
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        @formula(reaction ~ 1 + (1 | subj)),
+    ]
+    nested_ms = [fit(MixedModel, f, data; REML=false, progress=false) for f in nested_forms]
+    nested_res = modelavg(nested_ms...)   # default :zhang
+    nested_pred = predictma(nested_res, data)
+
+    h5open(fixture, "r") do f
+        Rcaic = read(f["nested/caic"])
+        Rpred = read(f["nested/prediction"])
+
+        for i in eachindex(Rcaic)
+            @test nested_res.caics[i] ≈ Rcaic[i] atol = L2_ATOL_CAIC
+        end
+        # the stable functional: prediction matches even though the weight vector is not pinned
+        @test length(nested_pred) == length(Rpred)
+        # per-observation band (elementwise), not the aggregated L2 norm over n = 180
+        @test maximum(abs.(nested_pred .- Rpred)) <= L2_ATOL_PRED
+        # weights remain a valid probability vector
+        @test sum(nested_res.weights) ≈ 1.0 atol = 1e-8
+        @test all(≥(-1e-10), nested_res.weights)
+    end
+end
+
+@testitem "live R re-validation of the predictma Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
+    :live_rcall
+] begin
+    # Fixture-rot guard (CLAUDE §6) for the predictMA Level-2 fixture: regenerate the
+    # references with live lme4 + cAIC4 and check the committed reference has not drifted.
+    # Skipped in the default (no-R) job; enabled by CAIC_LIVE_RCALL=1.
+    using HDF5
+
+    if get(ENV, "CAIC_LIVE_RCALL", "0") == "1"
+        here = @__DIR__
+        committed = joinpath(here, "fixtures", "predictma_level2.h5")
+        tmp = joinpath(mktempdir(), "predictma_level2.h5")
+        run(
+            addenv(
+                `Rscript $(joinpath(here, "generate_fixtures_predictma.R"))`,
+                "FIXTURE" => tmp,
+            ),
+        )
+        for s in ("wc", "nested")
+            comm_p = h5read(committed, "$s/prediction")
+            live_p = h5read(tmp, "$s/prediction")
+            comm_w = h5read(committed, "$s/weights")
+            live_w = h5read(tmp, "$s/weights")
+            @test live_p ≈ comm_p rtol = 1e-8 atol = 1e-8
+            @test live_w ≈ comm_w rtol = 1e-8 atol = 1e-8
+        end
+    else
+        @info "Skipping predictMA Level-2 live-RCall re-validation (set CAIC_LIVE_RCALL=1)"
+    end
+end
+
 @testitem "live R re-validation of the modelavg Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin

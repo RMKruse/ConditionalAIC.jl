@@ -205,6 +205,76 @@ function _avgraneff(ms, w::AbstractVector{T}) where {T}
     return NamedEffects{Tuple{String,String,String},T}(ks, vs)
 end
 
+# ── Model-averaged prediction (docs/math/0009 §5) ────────────────────────────────────
+
+"""
+    predictma(res::ModelAvgResult{T}, newdata; new_re_levels::Symbol=:error) -> Vector{T}
+
+Model-averaged conditional prediction over new data (port of `cAIC4`'s `predictMA`). Each
+candidate predicts conditionally on `newdata` and the per-candidate predictions are combined
+with the averaging weights of `res`:
+
+```math
+\\hat y^{\\mathrm{MA}}(D^*) \\;=\\; \\sum_{i=1}^{M} w_i\\,\\hat y_i(D^*),
+\\qquad
+\\hat y_i(D^*) \\;=\\; \\texttt{predict}(m_i, D^*),
+```
+
+mirroring `cAIC4`'s `w %*% t(sapply(candidates, predict, newdata = D*))`. `predict(mᵢ, D*)`
+is **conditional** — `Xβ̂ + Zb̂`, including the predicted random effects for grouping levels
+seen in training — matching `lme4`'s default `re.form = NULL`.
+
+The model-averaged prediction is a **stable functional** of the weights: when the candidates'
+conditional-mean vectors are collinear (`MᵀM` singular) the weight vector `ŵ` is non-unique,
+but `ŷ^MA` is invariant across the flat optimum directions (docs/math/0009 §7).
+
+# Arguments
+- `res`: a [`ModelAvgResult`](@ref) (from [`modelavg`](@ref)); its `weights` and candidate
+  `models` are reused, no refitting.
+- `newdata`: a `Tables.jl`-compatible table with the same schema the candidates were fit on,
+  including a (non-missing, numeric) response column — required by `MixedModels.predict` to
+  construct the prediction model.
+- `new_re_levels`: how previously-unobserved grouping levels are handled, forwarded to
+  `MixedModels.predict`. **Default `:error`** — mirrors `lme4`'s `allow.new.levels = FALSE`
+  (DECISIONS 2026-05-31; this overrides `MixedModels`' own `:missing` default). `:population`
+  (treat the random effect as 0) and `:missing` are opt-in.
+
+# Returns
+- `Vector{T}` — the model-averaged conditional prediction `ŷ^MA`, one entry per row of `newdata`,
+  in input-row order.
+
+# Throws
+- `ArgumentError` (from `MixedModels.predict`) if `new_re_levels == :error` and `newdata`
+  contains a grouping level not seen in training, or if the response column is missing.
+
+# Example
+```jldoctest
+julia> using MixedModels, cAIC
+
+julia> data = MixedModels.dataset(:sleepstudy);
+
+julia> m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false);
+
+julia> m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false);
+
+julia> res = modelavg(m1, m2);
+
+julia> yhat = predictma(res, data);
+
+julia> length(yhat) == length(data.reaction)
+true
+```
+"""
+function predictma(res::ModelAvgResult{T}, newdata; new_re_levels::Symbol=:error) where {T}
+    w = res.weights
+    ms = res.models
+    yhat = w[1] .* predict(ms[1], newdata; new_re_levels=new_re_levels)
+    for i in 2:length(ms)
+        yhat .+= w[i] .* predict(ms[i], newdata; new_re_levels=new_re_levels)
+    end
+    return yhat
+end
+
 # ── Zhang-optimal weight optimizer (docs/math/0009 §1–2, ADR-0007) ──────────────────
 
 """
