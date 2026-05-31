@@ -489,8 +489,8 @@ delegate to one shared driver:
 | piece          | `LinearMixedModel`                                  | `GeneralizedLinearMixedModel`                          |
 |----------------|-----------------------------------------------------|--------------------------------------------------------|
 | `score(model)` | `caic(model; method, hessian, nboot, sigmapenalty, rng)` | `caic(model; method, nboot, rng)`                 |
-| candidate refit| `fit(MixedModel, render(c), data; REML)`            | `fit(MixedModel, render(c), data, family)`             |
-| terminal fit   | `lm(y ~ fixed, data)` → `caic`                      | `glm(y ~ fixed, data, family)` → `caic`                |
+| candidate refit| `fit(MixedModel, render(c), data; REML)`            | `fit(MixedModel, render(c), data, family; weights=wts)`|
+| terminal fit   | `lm(y ~ fixed, data)` → `caic`                      | `glm(y ~ fixed, data, family; wts=wts)` → `caic`       |
 
 The GLMM scoring-kwarg set is **smaller**: `caic(::GeneralizedLinearMixedModel)` has no Gaussian
 `hessian`/`sigmapenalty` arguments (the Greven–Kneib Hessian and the σ-penalty are LMM-only), so
@@ -498,6 +498,14 @@ the GLMM method neither accepts nor forwards them. Both methods forward their kw
 **unchanged** to every candidate (the consistent-scoring requirement). The terminal fit uses the
 model's GLM distribution family (`m.resp.d`), so the GLMM terminal is the family `glm`, scored by
 the same ADR-0006 `caic(::RegressionModel)` terminal as the Gaussian `lm`.
+
+The GLMM refit and terminal additionally reuse the model's **prior weights** `wts = m.resp.wts`
+(the binomial denominators nᵢ, `glmmpriorweights`): a multi-trial Binomial candidate scored without
+its trial counts is a *different model* (and its corrected `condloglik_binomial` mismatches the
+restored counts at the `glm` terminal). The weight vector is empty for the unweighted Poisson /
+Bernoulli families, where `weights=`/`wts=` empty is the unweighted default — so those paths are
+unchanged. This is why a multi-trial Binomial search (`method=:bootstrap`, since the family has no
+`:auto` df) reaches and scores its `glm` terminal correctly.
 
 ### 4.2 The **forward** and **`both`** arcs (#41)
 

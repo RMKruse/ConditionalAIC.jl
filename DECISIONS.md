@@ -6,6 +6,29 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — GLMM `stepcaic` backward-to-`glm`-terminal scenario: per-scenario Level-2 band (`atol = 1e-2`), measured
+
+**What this records.** The `glmm_poisson_terminal` driver scenario (`stepcaic_driver_level2.h5`, #42)
+validates a GLMM backward search **descending to and scoring the `glm` terminal**: a single random
+intercept Poisson GLMM `y ~ x + (1 | g)` whose only backward neighbour is the no-RE `glm` (§0.1).
+`cAIC4`'s `stepCAIC` scores that terminal `glm(y ~ x, poisson)` (≈ 842.97), rejects it, and keeps
+`(1 | g)` — the Poisson analogue of the Gaussian `sleepstudy_int` scenario.
+
+**Two anchors, two bands.** The scored **terminal** candidate matches `cAIC4`'s `glm`-terminal cAIC
+to ≈1e-2 *and* equals the project's own (Level-2-validated) `caic(::TableRegressionModel{<:GeneralizedLinearModel})`
+exactly — a deterministic Poisson IRLS solve with no dispersion σ̂, so no Gaussian σ̂ divergence
+(entry 2026-05-31, terminal). The kept **incumbent** GLMM score is the only piece needing a wider band:
+`selected.caic` = 725.4593 (MixedModels) vs `bestCAIC` = 725.4668 (lme4), a measured discrepancy of
+**7.57e-3** (relative **1.04e-5**). This is a pure lme4↔MixedModels Laplace-fit discrepancy — both fit
+the same conditional model but reach slightly different θ̂, and the Chen–Stein df (ρ ≈ 18.04 over 20
+groups) reads that θ̂-dependent penalty. The single-grouping 20-level fit legitimately diverges more
+than the crossed-2RE `glmm_poisson_keep` (9.6e-4); per CLAUDE §6 / §10 the **measured 7.57e-3 is the
+fit-discrepancy bound**, so this scenario's incumbent anchor uses **`atol = 1e-2`** (the terminal
+anchor stays tight). The decision is unambiguous regardless: the terminal sits ≈117 cAIC units above
+the incumbent, far outside any fit band, so the gate still discriminates the keep-vs-descend decision.
+
+---
+
 ## 2026-05-31 — `stepcaic` on a `GeneralizedLinearMixedModel`: reused GLMM Level-2 band and the smaller scoring-kwarg set
 
 **What this records.** The backward `stepcaic` driver now dispatches on model family

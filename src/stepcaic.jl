@@ -844,13 +844,19 @@ function stepcaic(
     )::CAICResult{T,LinearMixedModel{T}}
     refitcand(c) = fit(MixedModel, render(c, fixed, lhs), data; REML=reml, progress=false)
     terminalfit() = (tm=lm(_StatsModels.FormulaTerm(lhs, fixed), data); (tm, caic(tm)))
-    gencands(spec, dir) = if dir === :forward
-        forwardcandidates(
-        spec; slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation
-    )
-    else
-        backwardcandidates(spec; keep, selectcorrelation, allownointercept)
-    end
+    gencands(spec, dir) =
+        if dir === :forward
+            forwardcandidates(
+                spec;
+                slopecandidates,
+                groupcandidates,
+                maxslopes,
+                useacross,
+                selectcorrelation,
+            )
+        else
+            backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+        end
 
     options = StepcaicOptions(
         direction,
@@ -1152,21 +1158,35 @@ function stepcaic(
     )
 
     # Quarantined formula parts + the GLM distribution family; candidates refit with that family.
+    # The prior weights (binomial denominators nᵢ; empty for Poisson/Bernoulli) are reused on every
+    # candidate refit and the terminal glm — without them a multi-trial Binomial candidate is a
+    # different model (its trial counts are lost). `weights=`/`wts=` empty is the unweighted default,
+    # so the Poisson/Bernoulli paths are unchanged.
     fixed = MMInternals.fixedterm(m)
     lhs = MMInternals.responseterm(m)
     dist = MMInternals.glmmdist(m)
+    wts = MMInternals.glmmpriorweights(m)
     score(model) =
         caic(model; method, nboot, rng)::CAICResult{T,GeneralizedLinearMixedModel{T,D}}
-    refitcand(c) = fit(MixedModel, render(c, fixed, lhs), data, dist; progress=false)
-    terminalfit() =
-        (tm=GLM.glm(_StatsModels.FormulaTerm(lhs, fixed), data, dist); (tm, caic(tm)))
-    gencands(spec, dir) = if dir === :forward
-        forwardcandidates(
-        spec; slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation
+    refitcand(c) =
+        fit(MixedModel, render(c, fixed, lhs), data, dist; weights=wts, progress=false)
+    terminalfit() = (
+        tm=GLM.glm(_StatsModels.FormulaTerm(lhs, fixed), data, dist; wts=wts);
+        (tm, caic(tm))
     )
-    else
-        backwardcandidates(spec; keep, selectcorrelation, allownointercept)
-    end
+    gencands(spec, dir) =
+        if dir === :forward
+            forwardcandidates(
+                spec;
+                slopecandidates,
+                groupcandidates,
+                maxslopes,
+                useacross,
+                selectcorrelation,
+            )
+        else
+            backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+        end
 
     options = StepcaicOptions(
         direction,

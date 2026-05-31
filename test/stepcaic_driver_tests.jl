@@ -322,6 +322,191 @@ end
     @test_throws ArgumentError stepcaic(m, data; direction=:backward, nboot=5)
 end
 
+@testitem "stepcaic GLMM backward descends to and scores the Poisson glm terminal (glmm_poisson_terminal, Level-2)" tags = [
+    :level2
+] begin
+    using HDF5
+    using MixedModels
+    using GLM: glm, Poisson
+    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+
+    # A SINGLE random-intercept Poisson GLMM `y ~ x + (1 | g)` — the Poisson analogue of the Gaussian
+    # `sleepstudy_int` scenario. The only backward neighbour of one random intercept is the no-RE
+    # `glm` terminal (§0.1), so the search descends to `glm(y ~ x, Poisson())`, SCORES it, and —
+    # because the group effect is supported — REJECTS it (the terminal cAIC is worse), keeping
+    # `(1 | g)`. Data shared bit-for-bit with cAIC4 via `raw_data` (lme4 and MixedModels.jl share no
+    # datasets); the Julia driver re-fits the SAME columns. Provenance: fixture
+    # glmm_poisson_terminal/finalformula = "y ~ x + (1 | g)", finalclass glmerMod.
+    fixture = joinpath(@__DIR__, "fixtures", "stepcaic_driver_level2.h5")
+    y, x, g, bestCAIC, glmTermCAIC = h5open(fixture, "r") do f
+        gr = f["glmm_poisson_terminal"]
+        rd = gr["raw_data"]
+        (
+            Float64.(read(rd["y"])),
+            Float64.(read(rd["x"])),
+            Int.(read(rd["g"])),
+            asscalar(read(gr["bestCAIC"])),
+            asscalar(read(gr["glmTermCAIC"])),
+        )
+    end
+    data = (; y, x, g)
+    m = fit(MixedModel, @formula(y ~ 1 + x + (1 | g)), data, Poisson(); progress=false)
+
+    res = stepcaic(m, data; direction=:backward)
+    @test res isa StepcaicResult
+    @test res.model isa GeneralizedLinearMixedModel        # incumbent kept, not the glm terminal
+
+    # cAIC4's decision: keep `(1 | g)` (the terminal is worse). The selected score is exactly our own
+    # caic of the input (no step accepted) and matches cAIC4's bestCAIC within the GLMM Level-2 band.
+    @test extract(res.model) == RESpec([REGroup(:g, ["(Intercept)"], true)])
+    @test res.selected.caic == caic(m).caic
+    # Per-scenario Level-2 band (DECISIONS 2026-05-31): the single-grouping 20-level Poisson fit
+    # diverges lme4↔MixedModels by a measured 7.57e-3 (relative 1.04e-5) — a pure Laplace-fit/θ̂
+    # discrepancy the Chen–Stein df (ρ≈18.04) reads, larger than the crossed-2RE `glmm_poisson_keep`
+    # (9.6e-4). The terminal sits ≈117 cAIC units away, so the keep decision is never in doubt.
+    L2_ATOL = 1e-2
+    @test res.selected.caic ≈ bestCAIC atol = L2_ATOL
+
+    # The terminal WAS reached and scored: one rejected backward step whose SOLE candidate is the
+    # `glm` terminal (`spec === nothing`), scored by the same `caic(::TableRegressionModel)` the
+    # controller drives. Its score equals the project's own Poisson-glm-terminal caic, and matches
+    # cAIC4's glm-terminal cAIC tightly (Poisson has no dispersion σ̂ — no Gaussian σ̂ divergence).
+    @test length(res.path) == 1
+    rec = only(res.path)
+    @test rec.direction === :backward
+    @test rec.accepted == false
+    @test length(rec.candidates) == 1
+    cand = only(rec.candidates)
+    @test cand.spec === nothing
+    glmterm = caic(glm(@formula(y ~ 1 + x), data, Poisson()))
+    @test cand.caic == glmterm.caic
+    @test cand.caic ≈ glmTermCAIC atol = 1e-2
+    @test cand.caic > res.selected.caic                    # rejected: terminal is worse
+    @test cand.dof == glmterm.dof                          # df = rank + 1 = 3
+end
+
+@testitem "stepcaic GLMM bootstrap-family search is reproducible under a fixed rng (crossed multi-trial Binomial)" begin
+    using MixedModels
+    using Random: Xoshiro
+    using cAIC: caic, stepcaic, StepcaicResult
+
+    # Multi-trial Binomial has no analytic df (cAIC4's getcondLL is defective for nᵢ > 1; the M3
+    # path uses the corrected `condloglik_binomial` — DECISIONS 2026-05-29). Under `method=:auto`
+    # the family is unsupported; the user must pass `method=:bootstrap`. The search then scores each
+    # candidate with a SINGLE forwarded `rng`, serially — so a whole run is reproducible: two runs
+    # from identically-seeded `Xoshiro`s land on bit-identical scores at every candidate of every
+    # step (#42 acceptance criterion). A crossed 2-RE model makes the backward step score TWO GLMM
+    # drops, so reproducibility is exercised across a sequence of bootstrap scores (not just the
+    # incumbent) — the rng state must advance identically through both. Self-contained synthetic
+    # data: candidate REFITS are deterministic (GLMM optimisation), only the bootstrap draws consume
+    # the rng, so identical seeds ⇒ identical run.
+    rng0 = Xoshiro(11)
+    ns, ni, nrep = 10, 8, 2
+    rows = ns * ni * nrep
+    sub = repeat(1:ns, inner=ni * nrep)
+    item = repeat(repeat(1:ni, inner=nrep), outer=ns)
+    us = 0.6 .* randn(rng0, ns)
+    ui = 0.5 .* randn(rng0, ni)
+    ntri = rand(rng0, 10:20, rows)
+    p = 1 ./ (1 .+ exp.(-(-0.2 .+ us[sub] .+ ui[item])))
+    incid = [Float64(sum(rand(rng0, ntri[i]) .< p[i])) for i in 1:rows]   # successes out of nᵢ trials
+    data = (; prop=incid ./ ntri, ntri=Float64.(ntri), sub, item)
+
+    m = fit(
+        MixedModel,
+        @formula(prop ~ 1 + (1 | sub) + (1 | item)),
+        data,
+        Binomial();
+        weights=data.ntri,
+        progress=false,
+    )
+    @test !issingular(m)
+
+    # `method=:auto` on a multi-trial Binomial is unsupported: the incumbent score fails loud at the
+    # very first step (the kwargs reach `caic`), so the whole search raises ArgumentError.
+    @test_throws ArgumentError stepcaic(m, data; direction=:backward)
+
+    # A comparable signature of a whole run: the selected score plus, per step, every candidate's
+    # cAIC, the argmin, and the accept flag. Two identically-seeded runs must produce equal signatures.
+    sig(res) = (
+        res.selected.caic,
+        [
+            ([c.caic for c in rec.candidates], rec.bestindex, rec.accepted) for
+            rec in res.path
+        ],
+    )
+
+    run() = stepcaic(
+        m, data; direction=:backward, method=:bootstrap, nboot=25, rng=Xoshiro(20240531)
+    )
+    r1 = run()
+    r2 = run()
+    @test r1 isa StepcaicResult
+    @test length(r1.path[1].candidates) == 2          # both crossed drops bootstrap-scored
+    @test sig(r1) == sig(r2)                            # bit-identical across the whole run
+
+    # A different seed perturbs the bootstrap draws — observable proof the forwarded rng actually
+    # drives the scoring (the reproducibility above is not a degenerate no-op).
+    r3 = stepcaic(
+        m, data; direction=:backward, method=:bootstrap, nboot=25, rng=Xoshiro(99)
+    )
+    @test sig(r3) != sig(r1)
+end
+
+@testitem "stepcaic GLMM backward reaches and scores the multi-trial Binomial glm terminal (CBPP)" begin
+    using MixedModels
+    using GLM: glm, Binomial
+    using Random: Xoshiro
+    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+
+    # CBPP: a single random-intercept multi-trial Binomial GLMM `incid/hsz ~ period + (1 | herd)`
+    # (trial counts `hsz` are the prior weights). Backward's only neighbour is the no-RE `glm`
+    # terminal (§0.1) — `glm(incid/hsz ~ period, Binomial(); wts = hsz)`. Reaching it in-search
+    # requires the driver to thread the model's prior weights into the terminal fit; without them the
+    # terminal is a different (unweighted) model and the corrected `condloglik_binomial` mismatches
+    # the trial counts. The terminal is scored by the same `caic(::TableRegressionModel)` the
+    # controller drives, so the in-search terminal candidate equals a standalone `caic(glm)` exactly.
+    # `method=:bootstrap` is mandatory (multi-trial Binomial has no `:auto` df); the terminal score
+    # itself is deterministic (the glm terminal ignores `method`).
+    cbpp = MixedModels.dataset(:cbpp)
+    m = fit(
+        MixedModel,
+        @formula(incid / hsz ~ 1 + period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+
+    res = stepcaic(
+        m, cbpp; direction=:backward, method=:bootstrap, nboot=25, rng=Xoshiro(7)
+    )
+
+    # One backward step whose SOLE candidate is the `glm` terminal (`spec === nothing`).
+    @test length(res.path) == 1
+    rec = only(res.path)
+    @test rec.direction === :backward
+    @test length(rec.candidates) == 1
+    cand = only(rec.candidates)
+    @test cand.spec === nothing
+
+    # The terminal was scored WITH the trial counts: its in-search score equals a standalone
+    # weighted `glm` terminal scored by the project's own `caic`, to the bit. df = rank + 1.
+    terminal = caic(
+        glm(@formula(incid / hsz ~ 1 + period), cbpp, Binomial(); wts=float.(cbpp.hsz))
+    )
+    @test cand.caic == terminal.caic
+    @test cand.dof == terminal.dof
+    @test isfinite(cand.caic)                          # the corrected condloglik_binomial is finite
+
+    # The group effect is supported, so cAIC4-style the terminal is rejected and `(1 | herd)` kept.
+    @test extract(res.model) == RESpec([REGroup(:herd, ["(Intercept)"], true)])
+    @test res.model isa GeneralizedLinearMixedModel
+    @test cand.caic > res.selected.caic
+end
+
 @testitem "stepcaic backward accepts a term drop that lowers the cAIC (Pastes, Level-2)" tags = [
     :level2
 ] begin

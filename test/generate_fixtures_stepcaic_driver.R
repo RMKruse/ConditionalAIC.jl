@@ -235,6 +235,47 @@ cat(sprintf("  %-18s bestCAIC=%.6f  final[%s]: %s\n",
             gftag, gfres$bestCAIC, paste(class(gffm), collapse = ","),
             paste(deparse(formula(gffm)), collapse = " ")))
 
+# ── GLMM backward terminal scenario (#42) ─────────────────────────────────────
+# A SINGLE random-intercept Poisson `glmer` fit whose backward stepcAIC descends to the `glm`
+# terminal — the only backward neighbour of one random intercept is the no-RE `glm` (§0.1). The
+# group effect is supported (non-singular fit), so the terminal `y ~ x` is scored and REJECTED,
+# keeping `(1 | g)`: the Poisson analogue of the Gaussian `sleepstudy_int` scenario. raw_data is
+# stored again (lme4 and MixedModels.jl share no datasets) so the Julia driver re-fits the SAME
+# columns. `glmTermCAIC` independently anchors the scored terminal candidate (df = rank + 1,
+# cll = Σ dpois at μ̂); Poisson has no dispersion σ̂, so the project's `caic(glm)` matches it
+# tightly — no Gaussian σ̂ divergence (DECISIONS 2026-05-31).
+set.seed(101)
+gt_ng <- 20; gt_npg <- 12; gt_n <- gt_ng * gt_npg
+gt_g  <<- factor(rep(1:gt_ng, each = gt_npg))
+gt_x  <<- rnorm(gt_n)
+gt_u  <- rnorm(gt_ng, 0, 0.6)
+gt_eta<- 0.5 + 0.6 * gt_x + gt_u[as.integer(gt_g)]
+gt_y  <<- rpois(gt_n, exp(gt_eta))
+gtdat <<- data.frame(y = gt_y, x = gt_x, g = gt_g)
+gtfit <- glmer(y ~ x + (1 | g), data = gtdat, family = poisson)
+stopifnot("glmm terminal scenario unexpectedly singular" = !isSingular(gtfit))
+gtres <- stepcAIC(gtfit, direction = "backward", data = gtdat,
+                  numberOfSavedModels = 1, returnResult = TRUE, trace = FALSE)
+gtfm  <- gtres$finalModel
+gttag <- "glmm_poisson_terminal"
+gt_glm     <- glm(y ~ x, data = gtdat, family = poisson)
+gt_termcaic <- -2 * as.numeric(logLik(gt_glm)) + 2 * (gt_glm$rank + 1)
+h5createGroup(fixture, gttag)
+h5createGroup(fixture, file.path(gttag, "raw_data"))
+put(file.path(gttag, "raw_data", "y"), as.numeric(gt_y))
+put(file.path(gttag, "raw_data", "x"), as.numeric(gt_x))
+put(file.path(gttag, "raw_data", "g"), as.integer(gt_g))   # 1-based grouping codes
+put(paste0(gttag, "/bestCAIC"), as.numeric(gtres$bestCAIC))
+put(paste0(gttag, "/glmTermCAIC"), as.numeric(gt_termcaic))
+put(paste0(gttag, "/direction"), "backward")
+put(paste0(gttag, "/family"), "poisson")
+put(paste0(gttag, "/initialformula"), "y ~ 1 + x + (1 | g)")
+put(paste0(gttag, "/finalformula"), paste(deparse(formula(gtfm)), collapse = " "))
+put(paste0(gttag, "/finalclass"), paste(class(gtfm), collapse = ","))
+cat(sprintf("  %-18s bestCAIC=%.6f  glmTerm=%.6f  final[%s]: %s\n",
+            gttag, gtres$bestCAIC, gt_termcaic, paste(class(gtfm), collapse = ","),
+            paste(deparse(formula(gtfm)), collapse = " ")))
+
 h5createGroup(fixture, "meta")
 put("meta/cAIC4_version", caic4_version)
 put("meta/lme4_version", as.character(packageVersion("lme4")))
@@ -242,4 +283,4 @@ put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
 put("meta/R_version", R.version.string)
 
 cat(sprintf("Wrote %d driver scenario(s) to %s (cAIC4 %s, lme4 %s).\n",
-            length(scenarios) + 2L, fixture, caic4_version, as.character(packageVersion("lme4"))))
+            length(scenarios) + 3L, fixture, caic4_version, as.character(packageVersion("lme4"))))
