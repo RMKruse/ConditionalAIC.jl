@@ -91,6 +91,90 @@ function Base.show(io::IO, ::MIME"text/plain", t::AnocaicTable)
     return nothing
 end
 
+"""
+    NamedEffects{K,T<:AbstractFloat}
+
+A name-keyed vector of effect values: `keys::Vector{K}` (name-sorted) paired with
+`values::Vector{T}`. The storage mirrors the StatsAPI ecosystem convention of parallel
+name/value vectors (`coef`/`coefnames`, `fixef`/`fixefnames`), so the ordering the report
+wants is baked into the storage; keyed lookup is provided via `getindex` for ergonomics.
+
+`K` is `String` for the model-averaged fixed effects (the coefficient name) and
+`Tuple{String,String,String}` — `(grouping factor, level, RE term)` — for the random
+effects. Used by [`ModelAvgResult`](@ref).
+"""
+struct NamedEffects{K,T<:AbstractFloat}
+    keys::Vector{K}
+    values::Vector{T}
+end
+
+Base.length(e::NamedEffects) = length(e.keys)
+Base.keys(e::NamedEffects) = e.keys
+Base.values(e::NamedEffects) = e.values
+Base.haskey(e::NamedEffects, k) = any(isequal(k), e.keys)
+Base.pairs(e::NamedEffects) = (k => v for (k, v) in zip(e.keys, e.values))
+
+function Base.getindex(e::NamedEffects{K}, k) where {K}
+    i = findfirst(isequal(k), e.keys)
+    i === nothing && throw(KeyError(k))
+    return e.values[i]
+end
+
+"""
+    ModelAvgResult{T<:AbstractFloat}
+
+The result of cAIC-weighted model averaging over a set of Gaussian `LinearMixedModel{T}`
+candidates (port of `cAIC4`'s `modelAvg`). Returned by [`modelavg`](@ref).
+
+- `fixeff::NamedEffects{String,T}` — the model-averaged fixed effects, keyed on coefficient
+  name over the union of candidate coefficients (a name absent from a candidate contributes
+  0), name-sorted.
+- `raneff::NamedEffects{Tuple{String,String,String},T}` — the model-averaged random effects,
+  keyed on `(grouping factor, level, RE term)` over the union across candidates, sorted.
+- `weights::Vector{T}` — the per-candidate averaging weights (Buckland smoothed weights on
+  the `:smoothed` path), in **input order**; non-negative and summing to 1.
+- `caics::Vector{T}` — the per-candidate conditional AIC, in **input order** (the unsorted
+  `anocAIC` analogue).
+- `models::Vector{LinearMixedModel{T}}` — the candidate models, in input order.
+- `weighttype::Symbol` — the weight scheme used (`:smoothed` for Buckland).
+
+The result is **not** itself a fitted model — it is a pair of name-keyed averaged-coefficient
+vectors plus the weight provenance.
+"""
+struct ModelAvgResult{T<:AbstractFloat}
+    fixeff::NamedEffects{String,T}
+    raneff::NamedEffects{Tuple{String,String,String},T}
+    weights::Vector{T}
+    caics::Vector{T}
+    models::Vector{LinearMixedModel{T}}
+    weighttype::Symbol
+end
+
+function Base.show(io::IO, ::MIME"text/plain", r::ModelAvgResult)
+    n = length(r.models)
+    noun = n == 1 ? "candidate" : "candidates"
+    scheme = r.weighttype == :smoothed ? "Buckland smoothed" : string(r.weighttype)
+    println(io, "Model-averaged mixed model (modelavg): $n $noun, $scheme weights")
+    println(io, " Cand        cAIC       weight")
+    for i in 1:n
+        println(
+            io,
+            "  ",
+            lpad(i, 3),
+            "  ",
+            lpad(round(r.caics[i]; digits=4), 12),
+            "  ",
+            lpad(round(r.weights[i]; digits=6), 10),
+        )
+    end
+    println(io, " Averaged fixed effects:")
+    for (k, v) in zip(r.fixeff.keys, r.fixeff.values)
+        println(io, "  ", rpad(k, 16), round(v; digits=6))
+    end
+    print(io, " (", length(r.raneff), " averaged random-effect coefficients)")
+    return nothing
+end
+
 function Base.show(io::IO, ::MIME"text/plain", r::CAICResult)
     println(io, "Conditional AIC (cAIC)")
     println(io, "  cAIC               = ", r.caic)
