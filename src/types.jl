@@ -153,12 +153,16 @@ candidates (port of `cAIC4`'s `modelAvg`). Returned by [`modelavg`](@ref).
   0), name-sorted.
 - `raneff::NamedEffects{Tuple{String,String,String},T}` — the model-averaged random effects,
   keyed on `(grouping factor, level, RE term)` over the union across candidates, sorted.
-- `weights::Vector{T}` — the per-candidate averaging weights (Buckland smoothed weights on
-  the `:smoothed` path), in **input order**; non-negative and summing to 1.
+- `weights::Vector{T}` — the per-candidate averaging weights, in **input order**; non-negative
+  and summing to 1.
 - `caics::Vector{T}` — the per-candidate conditional AIC, in **input order** (the unsorted
   `anocAIC` analogue).
 - `models::Vector{LinearMixedModel{T}}` — the candidate models, in input order.
-- `weighttype::Symbol` — the weight scheme used (`:smoothed` for Buckland).
+- `weighttype::Symbol` — the weight scheme used: `:zhang` (Zhang-optimal, the default) or
+  `:smoothed` (Buckland 1997 exponential-cAIC weights).
+- `weightresult::Union{Nothing,WeightResult{T}}` — the full [`WeightResult`](@ref) from the
+  Zhang-optimal optimizer (weights, objective `J(ŵ)`, duration) when `weighttype == :zhang`;
+  `nothing` on the `:smoothed` path.
 
 The result is **not** itself a fitted model — it is a pair of name-keyed averaged-coefficient
 vectors plus the weight provenance.
@@ -170,12 +174,19 @@ struct ModelAvgResult{T<:AbstractFloat}
     caics::Vector{T}
     models::Vector{LinearMixedModel{T}}
     weighttype::Symbol
+    weightresult::Union{Nothing,WeightResult{T}}
 end
 
 function Base.show(io::IO, ::MIME"text/plain", r::ModelAvgResult)
     n = length(r.models)
     noun = n == 1 ? "candidate" : "candidates"
-    scheme = r.weighttype == :smoothed ? "Buckland smoothed" : string(r.weighttype)
+    scheme = if r.weighttype == :smoothed
+        "Buckland smoothed"
+    elseif r.weighttype == :zhang
+        "Zhang optimal"
+    else
+        string(r.weighttype)
+    end
     println(io, "Model-averaged mixed model (modelavg): $n $noun, $scheme weights")
     println(io, " Cand        cAIC       weight")
     for i in 1:n

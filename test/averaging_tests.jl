@@ -471,6 +471,111 @@ end
     end
 end
 
+# ── M4.5 issue #51: wire optimal weights as default + Level-2 anchor ────────────────────
+
+@testitem "modelavg default weights scheme is :zhang (Zhang-optimal)" tags = [:level2] begin
+    # The default weight scheme for modelavg is Zhang-optimal (:zhang), mirroring
+    # cAIC4's modelAvg(opt=TRUE) default. Calling modelavg without the weights kwarg
+    # must produce weighttype == :zhang, not :smoothed.
+    using MixedModels
+    using cAIC: modelavg, ModelAvgResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
+    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+
+    res = modelavg(m1, m2)
+    @test res isa ModelAvgResult{Float64}
+    @test res.weighttype == :zhang
+    @test length(res.weights) == 2
+    @test all(≥(-1e-10), res.weights)
+    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+end
+
+@testitem "modelavg :zhang stores a WeightResult in res.weightresult" tags = [:level2] begin
+    # Wire: ModelAvgResult from the :zhang path carries the full WeightResult
+    # (weights, objective, duration) so callers can inspect J(ŵ) without re-scoring.
+    # The :smoothed path stores nothing (weightresult === nothing).
+    using MixedModels
+    using cAIC: modelavg, ModelAvgResult, WeightResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
+    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+
+    res_zhang = modelavg(m1, m2; weights=:zhang)
+    @test hasproperty(res_zhang, :weightresult)
+    @test res_zhang.weightresult isa WeightResult{Float64}
+    @test res_zhang.weightresult.weights == res_zhang.weights
+    @test isfinite(res_zhang.weightresult.objective)
+    @test res_zhang.weightresult.objective ≥ 0
+
+    res_buckland = modelavg(m1, m2; weights=:smoothed)
+    @test res_buckland.weightresult === nothing
+end
+
+@testitem "getweights on :zhang ModelAvgResult returns cached weightresult" tags = [:level2] begin
+    # When modelavg was called with :zhang, getweights should return the already-computed
+    # WeightResult directly (no re-running caic). Result is identical to res.weightresult.
+    using MixedModels
+    using cAIC: modelavg, getweights, WeightResult
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), data; REML=false, progress=false)
+    m2 = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), data; REML=false, progress=false)
+
+    res = modelavg(m1, m2; weights=:zhang)
+    wr = getweights(res)
+    @test wr isa WeightResult{Float64}
+    @test wr.weights ≈ res.weightresult.weights
+    @test wr.objective ≈ res.weightresult.objective
+end
+
+@testitem "modelavg Zhang Level-2: optimal weights match cAIC4 modelAvg(opt=TRUE) on well-conditioned set" tags = [
+    :level2,
+] begin
+    # Level-2 anchor (docs/math/0009 §7, ADR-0007): fits a WELL-CONDITIONED candidate set
+    # (reaction ~ days FE present vs absent → genuinely different conditional means →
+    # MᵀM ≻ 0, unique QP minimiser) in MixedModels.jl, runs modelavg (default :zhang), and
+    # compares the weight vector to the cAIC4::modelAvg(opt=TRUE) reference from the
+    # committed fixture. Band = max(lme4↔MM fit discrepancy, §6.1 df-rounding perturbation);
+    # measured and recorded in DECISIONS.md.
+    using MixedModels, HDF5
+    using cAIC: modelavg
+
+    asscalar(x) = x isa AbstractArray ? only(x) : x
+    L2_ATOL = 1e-2  # wider than Buckland (1e-3): absorbs df-rounding perturbation
+
+    data = MixedModels.dataset(:sleepstudy)
+    # input order MUST match the R generator (full-slope, intercept-only) — two candidates
+    # with DIFFERENT fixed-effects structure ensure genuinely different conditional means.
+    forms = [
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        @formula(reaction ~ 1 + (1 | subj)),
+    ]
+    ms = [fit(MixedModel, f, data; REML=false, progress=false) for f in forms]
+    res = modelavg(ms...)  # default :zhang
+
+    fixture = joinpath(@__DIR__, "fixtures", "zhang_modelavg_level2.h5")
+    @test isfile(fixture)
+    h5open(fixture, "r") do f
+        Rcaic    = read(f["caic"])      # full-precision cAIC4 cAIC, input order
+        Rweights = read(f["weights"])   # modelAvg(opt=TRUE) weights, input order
+        Robj     = asscalar(read(f["objective"]))  # J(ŵ) from cAIC4
+
+        # per-candidate cAIC within M2 band
+        for i in eachindex(Rcaic)
+            @test res.caics[i] ≈ Rcaic[i] atol = 1e-3
+        end
+        # Zhang weight vector end-to-end
+        @test res.weights ≈ Rweights atol = L2_ATOL
+        @test sum(res.weights) ≈ 1.0
+        # objective value J(ŵ): magnitude O(n·σ̂²) ≈ 140000; relative band absorbs fit discrepancy.
+        # Observed deviation: |ΔJ| ≈ 1.04, rtol ≈ 7.4e-6 (see DECISIONS.md).
+        @test res.weightresult.objective ≈ Robj rtol = 1e-4
+    end
+end
+
 @testitem "live R re-validation of the modelavg Level-2 fixture (gated by CAIC_LIVE_RCALL)" tags = [
     :live_rcall
 ] begin

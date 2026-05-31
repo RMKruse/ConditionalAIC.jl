@@ -32,16 +32,18 @@ otherwise — the fail-loud strengthening of `cAIC4`'s unchecked `getME(m[[1]], 
 # Arguments
 - `m1, rest...`: one or more fitted Gaussian `LinearMixedModel` objects of the same float
   type.
-- `weights`: the weight scheme. `:smoothed` (the default) is the Buckland (1997)
-  exponential-cAIC smoothed weights `wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2)`, `Δᵢ = cAICᵢ − min cAIC`,
-  computed in log-space.
+- `weights`: the weight scheme. `:zhang` (the default) is the Zhang-optimal Mallows-criterion
+  weights via the transcribed `solnp` SQP (ADR-0007; docs/math/0009 §1–2). `:smoothed` is the
+  Buckland (1997) exponential-cAIC smoothed weights `wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2)`,
+  `Δᵢ = cAICᵢ − min cAIC`, computed in log-space.
 - `method, hessian, nboot, sigmapenalty`: forwarded unchanged to [`caic`](@ref) for every
   candidate, so all are scored consistently.
 
 # Returns
 - A [`ModelAvgResult`](@ref) carrying the name-keyed averaged `fixeff`/`raneff`, the
-  `weights` and per-candidate `caics` (both in input order), the candidate `models`, and the
-  `weighttype`.
+  `weights` and per-candidate `caics` (both in input order), the candidate `models`, the
+  `weighttype`, and — when `weighttype == :zhang` — the full [`WeightResult`](@ref) in
+  `weightresult` (objective `J(ŵ)`, duration).
 
 # Throws
 - `ArgumentError` if the candidates differ in response/observation count or REML setting, if
@@ -67,7 +69,7 @@ true
 function modelavg(
     m1::LinearMixedModel{T},
     rest::Vararg{LinearMixedModel{T}};
-    weights::Symbol=:smoothed,
+    weights::Symbol=:zhang,
     method::Symbol=:auto,
     hessian::Symbol=:analytic,
     nboot::Union{Int,Nothing}=nothing,
@@ -77,7 +79,7 @@ function modelavg(
     _validate_candidates(ms)
     weights in _WEIGHTTYPES || throw(
         ArgumentError(
-            "unknown weights=:$weights; supported: :smoothed (Buckland) and :zhang (Zhang-optimal).",
+            "unknown weights=:$weights; supported: :zhang (Zhang-optimal) and :smoothed (Buckland).",
         ),
     )
 
@@ -91,8 +93,10 @@ function modelavg(
         caics[i] = r.caic
     end
 
+    local wr::Union{Nothing,WeightResult{T}}
     if weights == :smoothed
         w = _bucklandweights(caics)
+        wr = nothing
     else  # :zhang
         rho = T[r.dof for r in caic_results]
         i_max = argmax(rho)
@@ -105,7 +109,7 @@ function modelavg(
     fixeff = _avgfixeff(ms, w)
     raneff = _avgraneff(ms, w)
     return ModelAvgResult{T}(
-        fixeff, raneff, w, caics, collect(LinearMixedModel{T}, ms), weights
+        fixeff, raneff, w, caics, collect(LinearMixedModel{T}, ms), weights, wr
     )
 end
 
@@ -251,8 +255,13 @@ true
 ```
 """
 function getweights(res::ModelAvgResult{T}) where {T}
+    # Fast path: :zhang result already carries the WeightResult — return it directly.
+    if res.weighttype == :zhang && res.weightresult !== nothing
+        return res.weightresult::WeightResult{T}
+    end
+    # Slow path (e.g. a :smoothed result): re-score with caic to get full-precision ρ
+    # (docs/math/0009 §6.1: not rounded), then run the optimizer.
     ms = res.models
-    # Re-score with caic to get full-precision ρ (docs/math/0009 §6.1: not rounded).
     caic_results = [caic(m) for m in ms]
     rho = T[r.dof for r in caic_results]
     i_max = argmax(rho)
@@ -282,7 +291,7 @@ function _getweights_raw(
 
     # R: find_weights <- function(w){ t(y - mu %*% w) %*% (y - mu %*% w) + 2*varDF*(w %*% df) }
     find_weights = let y = y, mu = mu, sigma_sq = sigma_sq, rho = rho
-        function (w::Vector{T}) where {T}
+        function (w::AbstractVector)
             resid = y - mu * w
             return T(dot(resid, resid)) + 2 * sigma_sq * T(dot(rho, w))
         end
@@ -347,7 +356,7 @@ end
 # implementation — it is a dead variable in both getWeights.R and weightOptim.R.
 # Kept for auditability (ADR-0007 decision 1).
 function _weightoptim(
-    weights_in::Vector{T},   # R: weights (= p0 on entry)
+    weights_in::AbstractVector{T},   # R: weights (= p0 on entry)
     lm_in::T,                # R: lm (Lagrange multiplier)
     targets_in::Vector{T},   # R: targets [funv, eqv] (unscaled)
     hess_in::Matrix{T},      # R: hess
@@ -367,7 +376,7 @@ function _weightoptim(
     mm = nw            # R: mm = numw
 
     # ── Mutable working copies (R: p0 <- weights; hess and targets are passed by value) ─
-    p0 = copy(weights_in)
+    p0 = Vector{T}(weights_in)
     hess = copy(hess_in)
     lambda = lambda_in
     targets = copy(targets_in)
