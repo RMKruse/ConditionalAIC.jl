@@ -21,11 +21,13 @@ CLAUDE.md §11.
 
 ## Near-term scope
 
-The committed near-term target is **LMM scoring and its immediate selection
-layer** — i.e. the M2 → M2.5 → M4 spine on Gaussian `LinearMixedModel`s. GLMM
-(M3), model averaging (M4.5), and additive models (M5) are deliberately deferred
-to their own milestones; M5 is decided late by design (CLAUDE.md §11). The rows
-below reflect that: the LMM spine is 🟦 (resolved), GLMM/additive rows are ⬜/🚫.
+The M2 → M2.5 → M3 → M4 → M4.5 spine is **complete and validated** against the
+R reference: LMM scoring (M2), comparison (M2.5), GLMM scoring (M3), stepwise
+search (M4), and model averaging (M4.5) are all 🟢 across the rows below. The
+only remaining open work is additive models (M5), deliberately deferred to their
+own milestone and decided late by design (CLAUDE.md §11), and the v1.0 /
+registration milestone (M6). The rows below reflect that: every in-scope row is
+🟢; the additive `gamm4` row is 🚫 (deferred).
 
 ## Public API
 
