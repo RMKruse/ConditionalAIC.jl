@@ -382,3 +382,127 @@ function _glmm_df_auto(::GeneralizedLinearMixedModel, d)
         ),
     )
 end
+
+# ── `lm`/`glm` terminal scoring (M4, ADR-0006) ────────────────────────────────────────────
+# A backward `stepcaic` search drops random-effects terms one at a time; dropping the last RE
+# term yields a fixed-effects-only model `MixedModels.jl` cannot represent, so the terminal of
+# the search is a plain `GLM.jl` `lm`/`glm` fit, scored here exactly as `cAIC4`'s `(g)lm` branch
+# (`cAIC4:::cAIC`): `df = rank + 1`, `cll = Σ` family log-density at μ̂, `caic = −2·cll + 2·df`,
+# reusing the `Loglik` kernels. This is **not** a Greven–Kneib / Steinian / bootstrap path — no
+# bias correction is applied — so the provenance is recorded as `method = :terminal`,
+# `bsource = :na`. Fitting/scoring the terminal touches no `MixedModels` internals (public
+# `GLM.jl` accessors only), so `MMInternals` is not involved. The estimand is pinned in
+# `docs/math/0008-stepcaic-search.md §0`.
+
+"""
+    caic(m::RegressionModel) -> CAICResult
+
+Score a fixed-effects-only `GLM.jl` `lm`/`glm` fit — the **terminal node** a backward
+[`stepcaic`](@ref) search reaches once the last random-effects term is dropped — by the same
+conditional AIC `cAIC4` assigns its `(g)lm` branch:
+
+```math
+\\mathrm{cAIC} = -2\\,\\ell + 2\\,(\\mathrm{rank} + 1),
+```
+
+with `ℓ` the marginal (here = conditional, no random effects) log-likelihood of `y` under the
+fitted family at the fitted mean μ̂, and the penalty `rank + 1` (the fixed-effect rank plus one
+estimated dispersion/σ²). No Greven–Kneib / Steinian / bootstrap bias correction is involved —
+the terminal is a deterministic closed form — so the result carries `method = :terminal` and
+`bsource = :na`, and `reducedmodel = nothing` / `refit = false` (the terminal is never singular).
+
+Supported terminals mirror M2/M3: the Gaussian `lm` (σ̂ the MLE rescaling
+`summary(·)\$sigma·√((n−p)/n)`, i.e. `√(RSS/n)`), and the Poisson / Bernoulli / multi-trial
+Binomial `glm`. The Binomial branch reuses [`condloglik_binomial`](@ref
+cAIC.Loglik.condloglik_binomial) (the corrected density, deviating from `cAIC4`'s defective
+multi-trial `getcondLL`; see `DECISIONS.md`); for the Bernoulli case it reduces to and matches
+`cAIC4` exactly. The estimand is pinned in `docs/math/0008-stepcaic-search.md §0`.
+
+# Arguments
+- `m`: a fitted `GLM.jl` `lm`/`glm` model (a `TableRegressionModel`).
+
+# Returns
+- A [`CAICResult`](@ref) carrying the cAIC, the penalty `ρ = rank + 1` (`dof`), the
+  log-likelihood (`condloglik`), and provenance (`method = :terminal`, `bsource = :na`).
+
+# Throws
+- `ArgumentError` for a `glm` family with no supported conditional log-likelihood (only
+  Gaussian `lm`, Poisson, Bernoulli, and Binomial `glm` are supported).
+
+# Example
+```jldoctest
+julia> using GLM, cAIC
+
+julia> data = (; x=[-1.0, -0.3, 0.2, 0.8, 1.4], y=[0.1, 0.9, 1.6, 2.1, 3.0]);
+
+julia> r = caic(lm(@formula(y ~ 1 + x), data));
+
+julia> r.caic ≈ -2 * r.condloglik + 2 * r.dof && r.dof == 3
+true
+```
+"""
+function caic(m::TableRegressionModel{<:LinearModel})
+    y = response(m)
+    μ = predict(m)
+    T = float(eltype(y))
+    n = length(y)
+    ρ = T(_terminalrank(m) + 1)               # cAIC4: df = rank + 1
+    σ = sqrt(T(deviance(m)) / n)               # MLE σ̂ = √(RSS/n); deviance(lm) = RSS
+    ℓ = Loglik.condloglik(y, μ, σ)
+    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
+end
+
+# Fixed-effect rank of a GLM.jl terminal — the `cAIC4` `object$rank`. For the full-rank
+# fixed-effects designs a `stepcaic` terminal carries, this is the number of coefficients
+# (`docs/math/0008 §0`); a rank-deficient design is out of scope for the search terminal.
+_terminalrank(m::TableRegressionModel) = length(coef(m))
+
+# Response family of a fitted `glm`, for terminal-scoring dispatch. `m.model` is the wrapped
+# `GeneralizedLinearModel`; its `rr.d` is the response distribution instance. GLM is exact-pinned
+# (DECISIONS 2026-05-30), so this field is stable for the supported version.
+_glmfamily(m::TableRegressionModel{<:GeneralizedLinearModel}) = m.model.rr.d
+
+# `glm` terminal: score by family, reusing the `Loglik` GLMM kernels at the fitted mean μ̂.
+# df = rank + 1 (cAIC4's `(g)lm` branch), as for the Gaussian `lm`.
+caic(m::TableRegressionModel{<:GeneralizedLinearModel}) = _glm_terminal(m, _glmfamily(m))
+
+function _glm_terminal(m::TableRegressionModel, ::Poisson)
+    y = response(m)
+    μ = predict(m)
+    T = float(eltype(y))
+    ρ = T(_terminalrank(m) + 1)
+    ℓ = Loglik.condloglik_poisson(y, μ)
+    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
+end
+
+function _glm_terminal(m::TableRegressionModel, ::Bernoulli)
+    y = response(m)
+    μ = predict(m)
+    T = float(eltype(y))
+    ρ = T(_terminalrank(m) + 1)
+    ℓ = Loglik.condloglik_bernoulli(y, μ)
+    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
+end
+
+function _glm_terminal(m::TableRegressionModel, ::Binomial)
+    # Multi-trial Binomial — the documented DEVIATION (DECISIONS 2026-05-29 / 2026-05-30): cAIC4's
+    # binomial getcondLL is −∞ for nᵢ > 1, so this reuses the corrected `condloglik_binomial` at the
+    # true per-observation trial counts, exactly as the M3 GLMM binomial path does. The response is
+    # the success proportion kᵢ/nᵢ and the trial counts nᵢ are the fit's prior weights.
+    y = response(m)
+    μ = predict(m)
+    n = m.model.rr.wts
+    T = float(eltype(y))
+    ρ = T(_terminalrank(m) + 1)
+    ℓ = Loglik.condloglik_binomial(y, μ, n)
+    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
+end
+
+function _glm_terminal(m::TableRegressionModel, d)
+    throw(
+        ArgumentError(
+            "caic: unsupported glm terminal family $(typeof(d)). Supported terminals: the \
+             Gaussian `lm`, and Poisson / Bernoulli / multi-trial Binomial `glm`."
+        ),
+    )
+end

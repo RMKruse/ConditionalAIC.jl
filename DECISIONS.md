@@ -6,6 +6,211 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — `stepcaic` `skipnonconverged`: convergence signal is the optimizer return code, not `lme4`'s gradient/Hessian check; no Level-2 fixture
+
+**Status:** accepted (design — #43). Milestone M4; option `skipnonconverged` (the `cAIC4`
+`calcNonOptimMod` analogue, default `false` ⇒ include non-converged, matching
+`calcNonOptimMod=TRUE`).
+
+`cAIC4`'s `calculateAllCAICs` excludes a candidate from the comparison (returns an `NA` cAIC)
+when `calcNonOptimMod=FALSE` **and** the fit raised a convergence code — `lme4`'s
+`m@optinfo$conv$lme4$code`, a *rich* post-hoc check (scaled gradient norm + Hessian
+positive-definiteness against tolerances). `MixedModels.jl` exposes no such check; the only
+convergence signal it carries is the **optimizer return code** `m.optsum.returnvalue`.
+`cAIC.jl` therefore defines `converged(m) := returnvalue ∉ {:FAILURE, :INVALID_ARGS,
+:OUT_OF_MEMORY, :FORCED_STOP, :MAXEVAL_REACHED, :MAXTIME_REACHED}` (mirroring `MixedModels`'
+own `_NLOPT_FAILURE_MODES`), and `skipnonconverged=true` gives a non-converged candidate an
+effective cAIC of `+Inf` (the `NA`-for-comparison analogue) and drops it from the
+`savedmodels` k-best.
+
+**The divergence.** The two ecosystems will flag *different* candidates as non-converged:
+`lme4` can flag a numerically-optimal fit whose gradient check trips its tolerance, while
+`MixedModels` reports success; conversely a fit that exhausts `MixedModels`' evaluation budget
+(`:MAXEVAL_REACHED`) need not raise an `lme4` code. The *selection mechanism* is identical
+(exclude-from-comparison); the *set of excluded candidates* is not guaranteed to match. A
+singular fit is **not** treated as non-converged (it is a first-class supported case, CLAUDE.md
+§9; `MixedModels` returns a success code with `λ` on the boundary).
+
+**Validation consequence.** Because deterministic non-convergence is not reproducible *identically*
+across optimizers, there is **no Level-2 `cAIC4` fixture** for this flag. It is validated by (1) a
+unit test of `converged` (a converged fit ⇒ `true`; an evaluation-budget-truncated fit ⇒ `false`),
+(2) an inert-case test (when every candidate converges, `skipnonconverged=true` reproduces the
+default run exactly), and (3) a mechanism test driving the real greedy controller with one candidate
+whose return code is tainted to a failure mode — asserting it is excluded from both the selection and
+the saved set. See `docs/math/0008-stepcaic-search.md` §5.
+
+---
+
+## 2026-05-31 — GLMM `stepcaic` backward-to-`glm`-terminal scenario: per-scenario Level-2 band (`atol = 1e-2`), measured
+
+**What this records.** The `glmm_poisson_terminal` driver scenario (`stepcaic_driver_level2.h5`, #42)
+validates a GLMM backward search **descending to and scoring the `glm` terminal**: a single random
+intercept Poisson GLMM `y ~ x + (1 | g)` whose only backward neighbour is the no-RE `glm` (§0.1).
+`cAIC4`'s `stepCAIC` scores that terminal `glm(y ~ x, poisson)` (≈ 842.97), rejects it, and keeps
+`(1 | g)` — the Poisson analogue of the Gaussian `sleepstudy_int` scenario.
+
+**Two anchors, two bands.** The scored **terminal** candidate matches `cAIC4`'s `glm`-terminal cAIC
+to ≈1e-2 *and* equals the project's own (Level-2-validated) `caic(::TableRegressionModel{<:GeneralizedLinearModel})`
+exactly — a deterministic Poisson IRLS solve with no dispersion σ̂, so no Gaussian σ̂ divergence
+(entry 2026-05-31, terminal). The kept **incumbent** GLMM score is the only piece needing a wider band:
+`selected.caic` = 725.4593 (MixedModels) vs `bestCAIC` = 725.4668 (lme4), a measured discrepancy of
+**7.57e-3** (relative **1.04e-5**). This is a pure lme4↔MixedModels Laplace-fit discrepancy — both fit
+the same conditional model but reach slightly different θ̂, and the Chen–Stein df (ρ ≈ 18.04 over 20
+groups) reads that θ̂-dependent penalty. The single-grouping 20-level fit legitimately diverges more
+than the crossed-2RE `glmm_poisson_keep` (9.6e-4); per CLAUDE §6 / §10 the **measured 7.57e-3 is the
+fit-discrepancy bound**, so this scenario's incumbent anchor uses **`atol = 1e-2`** (the terminal
+anchor stays tight). The decision is unambiguous regardless: the terminal sits ≈117 cAIC units above
+the incumbent, far outside any fit band, so the gate still discriminates the keep-vs-descend decision.
+
+---
+
+## 2026-05-31 — `stepcaic` on a `GeneralizedLinearMixedModel`: reused GLMM Level-2 band and the smaller scoring-kwarg set
+
+**What this records.** The backward `stepcaic` driver now dispatches on model family
+(`LinearMixedModel` / `GeneralizedLinearMixedModel`) through one shared core (`_runstepcaic`); only
+the score closure, the candidate refit, and the terminal fit differ (docs/math/0008 §4.1). Two
+points are worth pinning.
+
+**1 — The GLMM scoring-kwarg set is smaller, by design.** `caic(::GeneralizedLinearMixedModel)`
+takes only `method`/`nboot`/`rng` — it has no Gaussian `hessian`/`sigmapenalty` arguments (the
+Greven–Kneib Hessian and the σ-penalty are LMM-only). The GLMM `stepcaic` method therefore neither
+accepts nor forwards those two kwargs; it forwards its `{method, nboot, rng}` set unchanged to every
+candidate. This is not a divergence from `cAIC4` (whose `stepCAIC` has a single interface) but a
+faithful consequence of the project's family-split `caic` surface. The threading is gated by a
+deterministic test: `stepcaic(m, data; nboot=5)` must raise `ArgumentError` *through* the forwarded
+GLMM `caic` (nboot without `method=:bootstrap`), proving the kwarg reaches the score.
+
+**2 — Level-2 band reused (`atol = 1e-3`), measured.** The GLMM keep-incumbent driver scenario
+(`glmm_poisson_keep`, a crossed 2-RE Poisson, fixture `stepcaic_driver_level2.h5`) anchors
+`selected.caic ≈ cAIC4 bestCAIC` within **`atol = 1e-3`** — the same GLMM end-to-end band as the M3
+cases (entries 2026-05-29 / 2026-05-30). The measured lme4↔MixedModels discrepancy on this exact
+shared data is **9.6e-4**, inside the band; the nearest rejected drop sits ≈9 cAIC units above the
+incumbent, far outside it, so the gate still discriminates the keep decision. Per CLAUDE §6 the band
+is the fit-discrepancy bound, not a loosened tolerance. The Chen–Stein df is non-singular here.
+
+---
+
+## 2026-05-31 — `stepcaic` `savedmodels` k-best: one ranked list vs `cAIC4`'s split `finalModel` + `additionalModels` return
+
+**What diverges.** `cAIC4`'s `stepCAIC` returns the `numberOfSavedModels` best models as **two
+pieces**: the selected model in `finalModel`, and the runner-ups in `additionalModels` (with their
+cAICs in `attr(., "cAICs")`). Internally it accumulates every step's scored candidates, dedups by
+structure (`duplicatedMers`), keeps the top-k by cAIC, then **drops the global minimum from
+`additionalModels`** (`additionalModels[-1]`) because that minimum *is* `finalModel`. `cAIC.jl`'s
+`StepcaicResult.saved` instead returns **one ranked vector** — the same distinct top-k models,
+cAIC-ascending, with the selected model at `saved[1]` — i.e. `{finalModel} ∪ additionalModels`
+reunified into a single ordered list.
+
+**Why this is not a numerical divergence.** The *set* of saved models and their cAIC values is
+identical to `cAIC4`'s; only the packaging differs (a Julia API choice — a self-contained ranked
+list is more natural than a selected/runner-up split, and the `M`-erased `Vector{CAICResult{T}}`
+element type lets the `lm`/`glm` terminal sit in the same list as the `MixedModel` candidates). The
+two conventions `0 ⇒ keep all` and `1 ⇒ selected only` match `cAIC4` (`numberOfSavedModels == 0 →
+Inf`; `== 1 → additionalModels NULL`).
+
+**Validation.** Level-2 fixture `pastes_saved2` (`test/generate_fixtures_stepcaic_driver.R`,
+`numberOfSavedModels = 2`) stores `savedcaics = c(bestCAIC, attr(additionalModels, "cAICs"))` —
+the reunified ranked set `[301.4828311, 314.2642667]`, both `lmerMod`. The driver test asserts
+`[s.caic for s in result.saved]` equals it within the Level-2 band (`atol = 1e-3`) and is sorted
+ascending with `saved[1] == selected`. The `k = 3` set additionally pulls in the `lm` terminal
+(`314.2727` in `cAIC4`), excluded from the anchored test because that terminal carries the
+`glm`-dispersion σ̂ divergence of the entry below (and is numerically degenerate with the singular
+`(1|cask)` fit under the project's lm/MLE σ̂).
+
+---
+
+## 2026-05-31 — `stepcaic` backward terminal: the Gaussian σ̂ convention diverges from `cAIC4`'s `stepCAIC` `glm`-dispersion terminal
+
+**Status:** accepted (measured). Milestone M4 (#40); math spec
+`docs/math/0008-stepcaic-search.md §0.1`; tests `test/stepcaic_driver_tests.jl`.
+
+When a backward search reaches a single random-effects direction, the only smaller neighbour is
+the no-random-effects terminal (§0.1). `cAIC.jl` scores this terminal as a `GLM.jl` **`lm`**, with
+the Gaussian σ̂ the **MLE** rescaling `√(RSS/n) = √(deviance(lm)/n)` — reproducing `cAIC4`'s *own*
+`cAIC.lm` (`R/cAIC.R`, the `c("glm","lm")` branch) to machine precision (DECISIONS 2026-05-30, the
+terminal Level-2 band; ADR-0006).
+
+**The divergence.** `cAIC4`'s `stepCAIC` does **not** route its backward terminal through that
+`lm` path. Its `makeBackward` constructs the terminal as a **`glm(…, family = gaussian)`** (the
+returned `finalModel` carries class `c("glm","lm")`), and `cAIC.glm` evaluates the conditional
+log-likelihood at the **dispersion** σ̂ `√(RSS/(n−p)) = √(deviance/df.residual)` rather than the MLE.
+With `df = rank + 1` identical on both paths, the two terminals differ only by that σ̂ convention:
+on a non-singular synthetic scenario (`y ~ 1 + x + (1|g)`, no true group effect, `n = 120`, `p = 2`)
+`cAIC4`'s `stepCAIC` `bestCAIC = 329.1304` (glm/dispersion) versus `cAIC(lm) = 329.1135`
+(lm/MLE) — a **0.017** gap, well outside the terminal Level-2 band (`atol = 1e-3`). `cAIC4` is thus
+*internally inconsistent*: `cAIC.lm` and `stepCAIC`'s glm-gaussian terminal disagree on the same
+fixed-effects fit.
+
+**Resolution.** `cAIC.jl` keeps the `lm`/MLE terminal — it is the documented ADR-0006 choice, it
+matches `cAIC4`'s `cAIC.lm`, and it is consistent with how every other `caic` path estimates σ̂
+(the MLE). This is **not** a tolerance to loosen. **Validation consequence:** a backward search
+that *descends to and accepts* the terminal is anchored at Level-2 on the **structural** decision
+(`cAIC4`'s `finalModel` has class `c("glm","lm")` ⇒ `cAIC.jl` returns a `TableRegressionModel`) and
+numerically on the project's own `caic(lm)` (internal consistency, itself Level-2-validated against
+`cAIC.lm`); it is **not** anchored on `stepCAIC`'s `bestCAIC`, which carries the glm-dispersion σ̂.
+A search that *rejects* the terminal (the common case — `sleepstudy_int`, `Pastes`) is unaffected:
+the selected model is the incumbent mixed model, whose `bestCAIC` matches within band.
+
+---
+
+## 2026-05-30 — Added `GLM` as a direct runtime dependency (exact-pinned), for the `lm`/`glm` terminal
+
+**Status:** accepted (design — ADR-0006, issue #36). Milestone M4.
+
+**Reason.** A backward `stepcaic` search drops random-effects terms one at a time; dropping the
+*last* RE term yields a fixed-effects-only model. `MixedModels.jl` v5.5.1 cannot represent or fit
+a no-RE model (`fit(MixedModel, …)` requires at least one `|` term), so this **terminal node**
+must be fit and scored as a plain `GLM.jl` `lm`/`glm` — exactly as `cAIC4` does at the same point
+(`cAIC4:::cAIC`, the `c("glm","lm")` branch). The terminal scoring (`caic(::RegressionModel)`,
+`src/scoring.jl`) is built on `GLM.jl`'s public surface (`lm`/`glm`, `response`, `predict`,
+`deviance`, `coef`, the `LinearModel`/`GeneralizedLinearModel` types). The full rationale, the
+alternatives weighed, and the coupled `CAICResult` widening are recorded in
+[ADR-0006](docs/adr/0006-glm-terminal-and-result-generalization.md).
+
+**Exact pin (CLAUDE.md §3).** `GLM` is pinned to `=1.9.5` in **both** `Project.toml` and
+`test/Project.toml`, walked on any version bump exactly like the `MixedModels` pin. `GLM` is
+already a *transitive* dependency of `MixedModels` (5.5.1 resolves `GLM` 1.9.5), so promoting it to
+an explicit, exact-pinned direct dependency adds **no** resolved-environment drift — only the
+direct `[deps]`/`[compat]` entries. `RegressionModel` (the widened `CAICResult` bound, =
+`StatsAPI.RegressionModel`) is sourced through `GLM`'s re-export, so no further direct dependency
+(e.g. `StatsAPI`) is introduced.
+
+**No quarantine impact.** Fitting and scoring the terminal touches **no** `MixedModels` internals
+(public `GLM.jl` + StatsModels formula API), so the `src/mm_internals.jl` internal-access table is
+unchanged by this addition (ADR-0006, Consequences).
+
+---
+
+## 2026-05-30 — `lm`/`glm` terminal scoring: Level-2 tolerance (`atol=1e-3`) and the multi-trial-Binomial terminal deviation
+
+**Status:** accepted (validation — issue #36, ADR-0006). Milestone M4; fixture
+`test/fixtures/caic_glm_terminal_level2.h5` (generator `test/generate_fixtures_glm_terminal.R`);
+tests `test/glm_terminal_tests.jl`.
+
+**The Level-2 band.** The terminal `caic(::RegressionModel)` is validated end-to-end against
+`cAIC4`'s public `cAIC()` on the `c("glm","lm")` branch: the Gaussian `lm`, the log-link Poisson
+`glm`, and the logit-link Bernoulli `glm`. The shared `(df, condloglik, caic)` triple must agree
+within **`atol=1e-3`** — the same Level-2 band carried by the GLMM end-to-end cases (entry
+2026-05-29). The terminal sits *far* inside it: an `lm` is a deterministic OLS solve and a `glm` is
+IRLS to the same MLE, so with the sample **embedded** in the fixture (R and Julia score identical
+data — their RNGs never meet) the discrepancy is ~machine precision, not the iterative-LMM
+discrepancy the band was originally sized for. The band is retained (not tightened) for consistency
+with the rest of the Level-2 suite. cAIC4's `(g)lm` df is `rank + 1`, and its Gaussian σ̂ is the MLE
+rescaling `summary$sigma·√((n−p)/n) = √(RSS/n) = √(deviance(lm)/n)` — reproduced exactly.
+
+**The multi-trial-Binomial terminal deviation.** A multi-trial Binomial `glm` (per-observation
+trial counts nᵢ > 1) has **no finite `cAIC4` reference**: `cAIC4`'s binomial `getcondLL` evaluates
+`dbinom` on the success *proportion* with `size = |unique(y)|−1`, returning `−∞` (the defect
+documented in entry 2026-05-29). The terminal therefore reuses the corrected `condloglik_binomial`
+at the true trial counts (recovered from the fit's prior weights, `m.model.rr.wts`) — exactly as
+the M3 GLMM binomial path does (entry 2026-05-29). Ground truth is base-R `dbinom(kᵢ, nᵢ, μ̂ᵢ)`
+embedded in the fixture (a Level-1-style reference), validated at the same `atol=1e-3`; the test
+also asserts the result is finite, unlike cAIC4's `−∞`. Bernoulli (nᵢ ≡ 1) does **not** deviate:
+there `cAIC4`'s `size = |unique(y)|−1 = 1` is correct, so `condloglik_bernoulli` matches `cAIC4`
+exactly and is cross-checked against the live `cAIC4` reference above.
+
+---
+
 ## 2026-05-30 — `stepcaic` (M4) search scope: random-effects only, fixed effects held constant
 
 **Status:** accepted (design — grilled 2026-05-30). Milestone M4; math spec

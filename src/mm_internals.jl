@@ -18,6 +18,7 @@ first.
 | Touchpoint        | Kind        | Used by             | Extracted quantity                                       |
 |:------------------|:------------|:--------------------|:---------------------------------------------------------|
 | `m.optsum.REML`   | field       | [`reml`]            | REML flag (`Bool`); which objective was fitted           |
+| `m.optsum.returnvalue` | field  | [`converged`]       | optimizer return code (`Symbol`); non-converged when in the failure modes |
 | `m.sigma`         | property    | [`sigmahat`]        | residual standard deviation σ̂                            |
 | `ranef(m)`        | exported fn | [`bhat`]            | predicted random effects b̂ = λu, per grouping            |
 | `m.X`             | field       | [`fixedeffects`]    | n×p fixed-effects design X                                |
@@ -57,6 +58,12 @@ first.
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
+| `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (M4 RE-structure read) |
+| `MixedModels.schematize(f, data, contrasts)` | unexported fn | [`reterminfo`] | apply the model schema to a `keep` formula fragment so its `|` bars become RE terms |
+| `m.formula.lhs`   | field       | [`responseterm`]    | formula response term; the `lhs` of the rendered candidate formula             |
+| `RandomEffectsTerm` (`.lhs`/`.rhs`) | type/fields | [`reterminfo`] | a correlated RE term: `.lhs` directions `MatrixTerm`, `.rhs` grouping `CategoricalTerm` |
+| `MixedModels.ZeroCorr` (`.term`) | type/field | [`reterminfo`] | an uncorrelated `zerocorr` term; unwrapped to its inner `RandomEffectsTerm` |
+| `MatrixTerm` (`.terms`), `InterceptTerm{B}`, `CategoricalTerm.sym`, `termvars` | StatsModels types/fns | [`reterminfo`], [`fixedterm`] | RE-direction labels (`"(Intercept)"`/slope names), grouping symbol, fixed-part identification |
 
 **Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
@@ -71,8 +78,10 @@ module MMInternals
 
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
+    MixedModel,
     LinearMixedModel,
     GeneralizedLinearMixedModel,
+    RandomEffectsTerm,
     AbstractReMat,
     ReMat,
     vsize,
@@ -97,6 +106,11 @@ using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
 
+# StatsModels term types/functions (`MatrixTerm`, `InterceptTerm`, `termvars`, the
+# `FormulaTerm` field layout) are the upstream term representation `m.formula` is built
+# from; interpreting them is a quarantine concern (M4 `reterminfo`/`responseterm`/`fixedterm`).
+const SM = MixedModels.StatsModels
+
 # Raised when an internal touchpoint yields a value of an unexpected type/shape —
 # i.e. `MixedModels` has drifted from the pinned version. Failing loud here turns a
 # silent upstream change into a clear error instead of a wrong number downstream.
@@ -119,6 +133,41 @@ function reml(m::LinearMixedModel)
     flag = m.optsum.REML
     flag isa Bool || _drift("m.optsum.REML", Bool, flag)
     return flag
+end
+
+# The optimizer return codes that signal a failed (non-converged) fit, mirroring
+# `MixedModels`' own `_NLOPT_FAILURE_MODES` (the NLopt backend's failure classification). A
+# return value outside this set — `:FTOL_REACHED`, `:XTOL_REACHED`, `:SUCCESS`,
+# `:STOPVAL_REACHED`, the tolerance-reached successes, and the soft `:ROUNDOFF_LIMITED` — is a
+# converged fit. Held locally (not imported from the unexported backend constant) so the
+# convergence test does not reach past the documented touchpoint.
+const _NONCONVERGED_RETURNS = (
+    :FAILURE,
+    :INVALID_ARGS,
+    :OUT_OF_MEMORY,
+    :FORCED_STOP,
+    :MAXEVAL_REACHED,
+    :MAXTIME_REACHED,
+)
+
+"""
+    converged(m::MixedModel) -> Bool
+
+Whether the model's variance-parameter optimization converged (`m.optsum.returnvalue` is not
+one of the optimizer failure codes). The convergence signal `stepcaic`'s `skipnonconverged`
+option (the `cAIC4` `calcNonOptimMod` analogue) tests to exclude a non-converged candidate from
+the comparison.
+
+`lme4` flags non-convergence with a richer gradient/Hessian check (its `optinfo` convergence
+code);
+`MixedModels.jl` exposes only the optimizer return code, so this is the faithful analogue
+available — a documented divergence (DECISIONS.md). Works for both `LinearMixedModel` and
+`GeneralizedLinearMixedModel` (each carries its own `optsum`).
+"""
+function converged(m::MixedModel)
+    ret = m.optsum.returnvalue
+    ret isa Symbol || _drift("m.optsum.returnvalue", Symbol, ret)
+    return !(ret in _NONCONVERGED_RETURNS)
 end
 
 """
@@ -786,6 +835,119 @@ function _fill_conddraw!(rng, Ystar, μ, d, _m)
             "scope — matches cAIC4's \"not yet supported\" warning.",
         ),
     )
+end
+
+# ── RE-structure interpretation (M4) ───────────────────────────────────────────
+
+"""
+    reterminfo(m::MixedModel) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of `m.formula` (the structural truth) into the raw
+pieces of the `cAIC4` `cnms`-analogue `RESpec` — one entry `(grouping, directions,
+correlated)` per RE term, in formula order:
+
+- `grouping` — the grouping-factor symbol (`ret.rhs.sym` of the `RandomEffectsTerm`);
+- `directions` — the `cnms`-style column labels: `"(Intercept)"` for a random intercept
+  (`InterceptTerm{true}`), then each slope's variable name. A suppressed intercept
+  (`InterceptTerm{false}`, the `0 + …` form) contributes no entry;
+- `correlated` — `false` for a `zerocorr(… | g)` term (`MixedModels.ZeroCorr`), `true` for
+  a plain `(… | g)` (`RandomEffectsTerm`).
+
+This is the **quarantine** read of MixedModels'/StatsModels' term representation
+(`RandomEffectsTerm`, `MixedModels.ZeroCorr`, `MatrixTerm`, `InterceptTerm`, `termvars`):
+the wrapping into `RESpec`/`REGroup` is fit-independent and lives outside the quarantine
+(`src/respec.jl`). Every touched type/field is shape-asserted against the pinned version.
+
+# Throws
+- `ErrorException` (drift) for an unexpected `rhs` element type, a non-`Symbol` grouping, or
+  a slope direction that is not a single-variable term.
+"""
+function reterminfo(m::MixedModel)
+    rhs = m.formula.rhs
+    rhs isa Tuple || _drift("m.formula.rhs", "Tuple", rhs)
+    return _reterminfo(rhs)
+end
+
+"""
+    reterminfo(keep::FormulaTerm, data) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of a **schema-less** `keep` formula fragment (the `cAIC4`
+`keep\$random` analogue) into the same `(grouping, directions, correlated)` tuples as the model
+method. `keep` is first run through `MixedModels.schematize(keep, data, …)` — the same schema
+application `fit(MixedModel, …)` uses — so its `|` `FunctionTerm` bars become the
+`RandomEffectsTerm`/`ZeroCorr` terms `reterminfo` reads. The formula's left-hand side and any
+fixed-effects terms are ignored; only the RE structure is extracted.
+"""
+function reterminfo(keep::SM.FormulaTerm, data)
+    sf = MixedModels.schematize(keep, data, Dict{Symbol,Any}())
+    # A fixed-only RHS schematizes to a bare `MatrixTerm` (not a tuple); normalise so the
+    # no-random-effects case flows to an empty info list (and `extractkeep`'s `ArgumentError`).
+    rhs = sf.rhs isa Tuple ? sf.rhs : (sf.rhs,)
+    return _reterminfo(rhs)
+end
+
+# Shared RE-term reader for both `reterminfo` methods: walk a schema-applied formula RHS tuple,
+# skip the fixed-effects `MatrixTerm`, and read each `RandomEffectsTerm`/`ZeroCorr` into a
+# `(grouping, directions, correlated)` tuple.
+function _reterminfo(rhs::Tuple)
+    info = Tuple{Symbol,Vector{String},Bool}[]
+    for t in rhs
+        if t isa SM.MatrixTerm
+            continue                                  # the fixed-effects part
+        elseif t isa MixedModels.ZeroCorr
+            push!(info, _reterm_entry(t.term, false))
+        elseif t isa RandomEffectsTerm
+            push!(info, _reterm_entry(t, true))
+        else
+            _drift("formula RHS element", "MatrixTerm/RandomEffectsTerm/ZeroCorr", t)
+        end
+    end
+    return info
+end
+
+# Read one `RandomEffectsTerm` into `(grouping, directions, correlated)`. `ret.rhs` is the
+# grouping `CategoricalTerm` (its `.sym` is the factor name); `ret.lhs` is the directions
+# `MatrixTerm` (or a bare term for a single direction).
+function _reterm_entry(ret::RandomEffectsTerm, correlated::Bool)
+    grouping = ret.rhs.sym
+    grouping isa Symbol || _drift("RE term grouping `.rhs.sym`", Symbol, grouping)
+    terms = ret.lhs isa SM.MatrixTerm ? ret.lhs.terms : (ret.lhs,)
+    directions = String[]
+    for d in terms
+        if d isa SM.InterceptTerm{true}
+            push!(directions, "(Intercept)")
+        elseif d isa SM.InterceptTerm{false}
+            # suppressed intercept (`0 + …`): contributes no `cnms` column
+        else
+            vars = SM.termvars(d)
+            length(vars) == 1 ||
+                _drift("RE slope direction `termvars`", "a single-variable term", d)
+            push!(directions, string(only(vars)))
+        end
+    end
+    return (grouping, directions, correlated)
+end
+
+"""
+    responseterm(m::MixedModel)
+
+The response (left-hand-side) term of `m.formula` (`m.formula.lhs`) — supplied to
+[`render`](@ref cAIC.render) as the `lhs` of the rebuilt formula. Read from the structural
+truth `m.formula` (quarantine), no shape assertion: any `StatsModels` term is a valid `lhs`.
+"""
+responseterm(m::MixedModel) = m.formula.lhs
+
+"""
+    fixedterm(m::MixedModel) -> StatsModels.MatrixTerm
+
+The fixed-effects `MatrixTerm` of `m.formula` (the leading `m.formula.rhs[1]`) — reattached
+unchanged by [`render`](@ref cAIC.render) (the fixed part is held constant across `stepcaic`
+candidates, CONTEXT.md *Search*). Shape-asserted to be a `MatrixTerm`.
+"""
+function fixedterm(m::MixedModel)
+    fe = m.formula.rhs[1]
+    fe isa SM.MatrixTerm || _drift("m.formula.rhs[1]", "MatrixTerm", fe)
+    return fe
 end
 
 end # module MMInternals

@@ -284,3 +284,32 @@ end
     bad_y = zeros(Float64, length(cbpp.herd) + 3)
     @test_throws ArgumentError cAIC.MMInternals.bootstrapglmmfit(m, bad_y)
 end
+
+@testitem "converged reports the optimizer return status (LMM + GLMM)" begin
+    using MixedModels
+
+    f = @formula(yield ~ 1 + (1 | batch))
+    data = MixedModels.dataset(:dyestuff)
+    m = fit(MixedModel, f, data; progress=false)
+    @test cAIC.MMInternals.converged(m) === true
+    @inferred Bool cAIC.MMInternals.converged(m)
+
+    # A non-converged fit: truncate the evaluation budget so the optimizer returns
+    # `:MAXEVAL_REACHED` (a failure mode) rather than a tolerance-reached success.
+    bad = LinearMixedModel(f, data)
+    bad.optsum.maxfeval = 1
+    fit!(bad; progress=false)
+    @test cAIC.MMInternals.converged(bad) === false
+
+    # GLMM path uses the same `m.optsum.returnvalue` field.
+    cbpp = MixedModels.dataset(:cbpp)
+    g = fit(
+        MixedModel,
+        @formula(incid / hsz ~ period + (1 | herd)),
+        cbpp,
+        Binomial();
+        weights=float.(cbpp.hsz),
+        progress=false,
+    )
+    @test cAIC.MMInternals.converged(g) === true
+end

@@ -1,9 +1,9 @@
 # Result type for the scoring path. Included directly into the `cAIC` module (not a
 # submodule): `CAICResult` is part of the public surface and is returned by `caic`.
-# `MixedModel` is imported at the module top.
+# `RegressionModel` is imported at the module top.
 
 """
-    CAICResult{T<:AbstractFloat,M<:MixedModel}
+    CAICResult{T<:AbstractFloat,M<:RegressionModel}
 
 The result of scoring a fitted mixed-effects model by its conditional AIC
 (`cAIC = −2 ℓ_cond + 2 ρ`). Returned by [`caic`](@ref).
@@ -15,7 +15,8 @@ The fields are the public, typed accessors:
 - `condloglik::T` — the conditional log-likelihood ℓ(y | b̂, β̂, θ̂) (the `cAIC4`
   `getcondLL` quantity).
 - `reducedmodel::Union{Nothing,M}` — the reduced model a singular fit was scored on, or
-  `nothing` when the fit was non-singular and scored as given.
+  `nothing` when the fit was non-singular and scored as given (always `nothing` for the
+  never-singular `lm`/`glm` terminal).
 - `refit::Bool` — whether scoring was performed on a refitted reduced model.
 - `method::Symbol` — the degrees-of-freedom **method** actually used (provenance), e.g.
   `:steinian`.
@@ -24,8 +25,13 @@ The fields are the public, typed accessors:
 
 `method`/`bsource` record what was *resolved and run* (e.g. `method = :auto` resolves to
 `:steinian` for the Gaussian family), so candidates can be checked for consistent scoring.
+
+The model bound is `M <: RegressionModel` (the common supertype of `LinearMixedModel`,
+`GeneralizedLinearMixedModel`, and the `GLM.jl` `lm`/`glm` terminal a backward `stepcaic`
+search reaches when the last random-effects term is dropped). Every candidate — mixed or
+terminal — therefore scores into this one result type.
 """
-struct CAICResult{T<:AbstractFloat,M<:MixedModel}
+struct CAICResult{T<:AbstractFloat,M<:RegressionModel}
     caic::T
     dof::T
     condloglik::T
@@ -36,7 +42,7 @@ struct CAICResult{T<:AbstractFloat,M<:MixedModel}
 end
 
 """
-    AnocaicTable{T<:AbstractFloat,M<:MixedModel}
+    AnocaicTable{T<:AbstractFloat,M<:RegressionModel}
 
 The result of comparing a user-supplied set of fitted models by conditional AIC
 (port of `cAIC4`'s `anocAIC`). Returned by [`anocaic`](@ref).
@@ -52,7 +58,7 @@ Models are sorted ascending by `cAIC` — entry `1` is the best-fitting model (l
 
 The Δcaic for rank `k` is `results[k].caic - results[1].caic` (≥ 0 for all `k`).
 """
-struct AnocaicTable{T<:AbstractFloat,M<:MixedModel}
+struct AnocaicTable{T<:AbstractFloat,M<:RegressionModel}
     results::Vector{CAICResult{T,M}}
     inputorder::Vector{Int}
 end
