@@ -1,16 +1,13 @@
 name: CI
 
 on:
-  # CI deactivated: automatic push/pull_request triggers are disabled.
-  # Re-enable by uncommenting the two blocks below.
-  # push:
-  #   branches: [main]
-  #   tags: ['*']
-  # pull_request:
-  # Weekly fixture-rot guard. Deactivated alongside the rest of CI; re-enable with the
-  # rest. The job also runs on manual dispatch.
-  # schedule:
-  #   - cron: '0 4 * * 1'
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  # Weekly fixture-rot guard for the gated live-R re-validation job.
+  schedule:
+    - cron: '0 4 * * 1'
   workflow_dispatch:
 
 concurrency:

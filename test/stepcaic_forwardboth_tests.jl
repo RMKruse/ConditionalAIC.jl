@@ -1,13 +1,13 @@
 # Level-2 end-to-end tests for the FORWARD and BOTH arcs of the greedy `stepcaic` driver
 # (M4 §4.2, #41). Each fits the same model `cAIC4`'s `stepcAIC` was driven on
 # (test/generate_fixtures_stepcaic_driver.R, the forward/both scenarios) with `MixedModels.jl`,
-# runs `cAIC.stepcaic`, and asserts the selected RE structure plus `selected.caic ≈ bestCAIC`
+# runs `ConditionalAIC.stepcaic`, and asserts the selected RE structure plus `selected.caic ≈ bestCAIC`
 # within the Level-2 fit-discrepancy band. The cascade is the faithful port of
 # `R/stepcAIC.R:565–657` (decision part) + `:435` (forward-terminal arc).
 
 @testitem "stepcaic forward/both requires candidate variables (call-consistency, R/stepcAIC.R:347)" begin
     using MixedModels
-    using cAIC: stepcaic, StepcaicResult
+    using ConditionalAIC: stepcaic, StepcaicResult
 
     data = MixedModels.dataset(:sleepstudy)
     m = fit(
@@ -33,7 +33,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -80,7 +80,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -120,7 +120,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -160,7 +160,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -202,7 +202,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -245,7 +245,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 

@@ -1,4 +1,4 @@
-name = "cAIC"
+name = "ConditionalAIC"
 uuid = "abeed2a0-1958-478b-93f4-a1b8e265cb1f"
 version = "0.1.0"
 authors = ["RMKruse <rene.marcel.kruse@protonmail.com>"]

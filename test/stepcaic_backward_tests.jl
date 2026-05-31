@@ -11,20 +11,20 @@
 # term-string (an uncorrelated group expands to one single-label term per direction, mirroring
 # lme4's repeated-name `cnms`), so the Julia and cAIC4 candidate sets are compared like-for-like.
 @testsnippet BackwardFixtures begin
-    using cAIC
+    using ConditionalAIC
     using HDF5
 
     const FIXTURE = joinpath(@__DIR__, "fixtures", "stepcaic_backward_level1.h5")
 
     function parsespec(s)
-        groups = cAIC.REGroup[]
+        groups = ConditionalAIC.REGroup[]
         for grp in split(s, ";")
             meta, dirs = split(grp, ":")
             nm = Symbol(replace(meta, r"/cor=.*" => ""))
             cor = parse(Int, replace(meta, r".*cor=" => "")) == 1
-            push!(groups, cAIC.REGroup(nm, String.(split(dirs, ",")), cor))
+            push!(groups, ConditionalAIC.REGroup(nm, String.(split(dirs, ",")), cor))
         end
-        return cAIC.RESpec(groups)
+        return ConditionalAIC.RESpec(groups)
     end
 
     function canon(spec)
@@ -60,7 +60,7 @@
 
     # The enumerator's candidate set under one scenario's flags, in canonical encoding.
     function candidateset(sc)
-        cands = cAIC.backwardcandidates(
+        cands = ConditionalAIC.backwardcandidates(
             sc.spec; keep=sc.keep, selectcorrelation=sc.selcor, allownointercept=sc.noint
         )
         return Set(canon(c) for c in cands)
@@ -102,7 +102,7 @@ end
     BackwardFixtures
 ] begin
     sc = scenario("single_default")
-    cands = cAIC.backwardcandidates(sc.spec)
+    cands = ConditionalAIC.backwardcandidates(sc.spec)
     @test isempty(cands)                             # cAIC4's NA terminal → empty Vector{RESpec}
     @test sc.expected == Set{String}()
 end
@@ -188,6 +188,7 @@ end
 
 @testitem "backwardcandidates is type-stable" setup = [BackwardFixtures] begin
     sc = scenario("sleepstudy_default")
-    @test (@inferred Vector{cAIC.RESpec} cAIC.backwardcandidates(sc.spec)) isa
-        Vector{cAIC.RESpec}
+    @test (@inferred Vector{ConditionalAIC.RESpec} ConditionalAIC.backwardcandidates(
+        sc.spec
+    )) isa Vector{ConditionalAIC.RESpec}
 end

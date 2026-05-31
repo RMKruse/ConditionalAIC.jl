@@ -1,19 +1,19 @@
 """
-    cAIC.Components
+    ConditionalAIC.Components
 
-Build the Gaussian-LMM bias-correction component set ([`cAIC.DofLMM.GaussianComponents`](@ref))
-from the raw quantities extracted from a fitted `LinearMixedModel` — the `cAIC.jl` analogue
+Build the Gaussian-LMM bias-correction component set ([`ConditionalAIC.DofLMM.GaussianComponents`](@ref))
+from the raw quantities extracted from a fitted `LinearMixedModel` — the `ConditionalAIC.jl` analogue
 of `cAIC4`'s `getModelComponents.merMod`.
 
 This module performs the **construction** (the math of `docs/math/0002-gaussian-bias-correction.md`
 §3 and §6); it touches **no** `MixedModels` object — only the dense arrays the quarantine
-module [`cAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`, the per-reterm `Z`/`λ` blocks,
-and the `θ`-parametrisation map). It is therefore the fit-dependent bridge that ADR-0003
-places at **Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref), not
+module [`ConditionalAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`, the per-reterm `Z`/`λ` blocks,
+and the `θ`-parametrisation map). It is therefore the fit-dependent bridge at
+**Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref), not
 in Level-1 isolation.
 
 Every linear solve goes through a Cholesky factorisation; no explicit inverse and no `det`
-is formed (CLAUDE §9). The scaled inverse marginal variance `V₀⁻¹` is built from the
+is formed. The scaled inverse marginal variance `V₀⁻¹` is built from the
 Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`
 (`docs/math/0002` §3), and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
 """
@@ -32,7 +32,7 @@ fitted mean, `Zblocks`/`λblocks` the per-reterm dense `Z` and `λ` blocks, and 
 `θ → (reterm, row, col)` map (`docs/math/0002` §3, §6). `isREML` selects the objective the
 downstream bias correction uses.
 
-Builds, all via Cholesky solves (no explicit inverse; CLAUDE §9):
+Builds, all via Cholesky solves (no explicit inverse):
 
 - `ZΛ` block-by-block (`Λ` is block-diagonal across reterms and group copies);
 - `V₀⁻¹ = Iₙ − (ZΛ)(Iₖ + (ZΛ)ᵀ(ZΛ))⁻¹(ZΛ)ᵀ` (Woodbury);

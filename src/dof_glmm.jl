@@ -1,8 +1,8 @@
 """
-    cAIC.DofGLMM
+    ConditionalAIC.DofGLMM
 
 Family-specific **effective degrees of freedom** ρ for generalised linear mixed models —
-the GLMM-side analogue of [`cAIC.DofLMM`](@ref) for the Gaussian path.
+the GLMM-side analogue of [`ConditionalAIC.DofLMM`](@ref) for the Gaussian path.
 
 The estimand and all family-specific formulae are pinned in
 `docs/math/0006-glmm-bias-correction.md`. This module implements three df routes in M3
@@ -15,18 +15,19 @@ scope:
   weighted logit difference.
 - **Other families — conditional bootstrap:** [`dof_glmm_bootstrap`](@ref) / §5.
   Binomial with `|unique(y)|>2` and any other canonical-link family. `B` conditional
-  draws `y*(b) ~ f(μ̂)` (ADR-0005 direct draw), each refitted; the link-scale covariance
+  draws `y*(b) ~ f(μ̂)` directly from the conditional response distribution, each refitted;
+  the link-scale covariance
   penalty is [`DofLMM.efron_penalty`](@ref) with σ̂²=1.
 
-Each route follows the same Level-1 / Level-2 isolation pattern as `DofLMM`
-(ADR-0003): a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
+Each route follows the same Level-1 / Level-2 isolation pattern as `DofLMM`:
+a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
 [`dof_glmm_poisson`](@ref) for Poisson, [`_bernoulli_df`](@ref) for Bernoulli) carries
 the formula so it is testable without any model fitting; the
 `GeneralizedLinearMixedModel` dispatch builds those inputs via the refit loop and
 delegates.
 
-All access to `MixedModels.jl` internals goes through [`cAIC.MMInternals`](@ref)
-(CLAUDE.md §3).
+All access to `MixedModels.jl` internals is quarantined in
+[`ConditionalAIC.MMInternals`](@ref).
 """
 module DofGLMM
 
@@ -44,7 +45,7 @@ using ..MMInternals: glmmresponse, glmmlinpred, refitglmm_eta
 
 The influence-function component set for the Poisson Chen–Stein df
 (`docs/math/0006` §3). Parametrisation-neutral — this struct carries **no** fitted
-model, so the df arithmetic is testable in isolation from any fit (ADR-0003).
+model, so the df arithmetic is testable in isolation from any fit.
 
 # Fields
 - `y::Vector{T}`: the `n`-vector of observed counts (the fitted model's response).
@@ -102,7 +103,7 @@ decrement for the Poisson).
 
 # Example
 ```jldoctest
-julia> using cAIC: DofGLMM
+julia> using ConditionalAIC: DofGLMM
 julia> c = DofGLMM.PoissonInfluenceComponents(
            [2.0, 0.0, 1.0], [1.0, 0.5, 1.5], [1, 3], [0.9, 1.4]
        );
@@ -147,7 +148,7 @@ fallback before invoking this function (consistent with the Gaussian path and
 
 # Example
 ```julia
-using MixedModels, cAIC
+using MixedModels, ConditionalAIC
 m = fit(MixedModel, @formula(y ~ x + (1|group)), dat, Poisson(); progress=false)
 ρ = DofGLMM.dof_glmm_poisson(m)
 ```
@@ -174,7 +175,7 @@ end
     dof_glmm_bernoulli(m::GeneralizedLinearMixedModel{T}) -> T
 
 Efron's Steinian bias-corrected effective degrees of freedom for a fitted Bernoulli
-(binary logistic) GLMM. This is the `cAIC.jl` analogue of `cAIC4`'s
+(binary logistic) GLMM. This is the `ConditionalAIC.jl` analogue of `cAIC4`'s
 `biasCorrectionBernoulli` (`R/biasCorrectionBernoulli.R`).
 
 For each observation `i`, the whole model is refitted on the response with
@@ -216,7 +217,7 @@ Pure Efron Steinian formula kernel for the Bernoulli GLMM effective df
 (`docs/math/0006` §4). Given pre-computed per-flip fitted means `μhat_flip`,
 the result is a deterministic function of `(y, μhat, μhat_flip)`.
 
-This kernel is a Level-1 isolation unit (ADR-0003): it is fit-independent and can be
+This kernel is a Level-1 isolation unit: it is fit-independent and can be
 driven directly with synthetic inputs for tight-tolerance formula verification.
 
 # Arguments
@@ -259,8 +260,8 @@ canonical-link family. The estimand and algorithm are pinned in `docs/math/0006`
 \\quad \\hat\\sigma^2 = 1 \\text{ (canonical-link families).}
 ```
 
-Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response distribution
-(ADR-0005): `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
+Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response
+distribution: `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
 the link-scale fitted values after refitting on `y^{(b)}` — one full GLMM refit per draw,
 via [`MMInternals.refitglmm_eta`](@ref). The bias-correction arithmetic is the shared
 [`DofLMM.efron_penalty`](@ref) kernel with σ=1.

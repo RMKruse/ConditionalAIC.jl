@@ -11,7 +11,7 @@
     #   η̂^{(-i)}_i = [0.9, 1.4, 1.8]  (refit eta at the decremented observation)
     #   ρ = 2*(1.0 - 0.9) + 1*(1.5 - 1.4) + 3*(2.0 - 1.8)
     #     = 0.2 + 0.1 + 0.6 = 0.9
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     y = [2.0, 0.0, 1.0, 3.0]
     eta0 = [1.0, 0.5, 1.5, 2.0]
@@ -27,7 +27,7 @@ end
     :level1
 ] begin
     # When every observation has yᵢ = 0, ind is empty and ρ = 0 (no contributions).
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     y = [0.0, 0.0, 0.0]
     eta0 = [0.5, 0.3, 0.7]
@@ -43,7 +43,7 @@ end
 ] begin
     # dof_glmm_poisson(::PoissonInfluenceComponents{T}) must be @inferred for T = Float64
     # and T = Float32 (generic over the float type — CLAUDE §4).
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
     using Test: @inferred
 
     c64 = DofGLMM.PoissonInfluenceComponents(
@@ -66,7 +66,7 @@ end
     # No model fitting — pure arithmetic on pre-computed influence values.
     # Tolerance: rtol=1e-6, atol=1e-10 (Level-1 boundary; ADR-0003).
     using HDF5
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -103,7 +103,7 @@ end
     # biasCorrectionPoisson output. Tolerance derived from fit-discrepancy band (DECISIONS.md).
     using HDF5
     using MixedModels
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -159,7 +159,7 @@ end
     #        contrib = 0.21 * (-1) * (-log(14/9)) = 0.21*log(14/9)
     #
     # ρ = 2 * 0.21 * log(14/9) = 0.42 * log(14/9)
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     y = Float64[0.0, 1.0]
     μhat = Float64[0.3, 0.7]
@@ -171,7 +171,7 @@ end
 end
 
 @testitem "_bernoulli_df: type stability over Float64 and Float32" tags = [:level1, :glmm] begin
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     y64 = Float64[0.0, 1.0]
     μ64 = Float64[0.3, 0.7]
@@ -195,7 +195,7 @@ end
     # when the flip-refit raises μ̂ (positive logit diff), a y=0 observation contributes
     # positively to ρ, and a y=1 observation also contributes positively. Both cases
     # reflect sensitivity: the model's prediction at i changes when y_i is flipped.
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     # y=0 case: sign=+1, flip pushes μ̂_flip > μ̂  → logit_diff > 0 → contrib > 0
     μ = 0.4
@@ -221,7 +221,7 @@ end
 ] begin
     # μ̂ = 0.5 → logit = 0; μ̂_flip = 0.5 → zero contribution (model insensitive to flip).
     # Degenerate case, but not an error.
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     y = Float64[0.0, 1.0]
     μhat = Float64[0.5, 0.5]
@@ -240,7 +240,7 @@ end
     # The tolerance atol=1e-3 matches the LMM Level-2 band (DECISIONS.md).
     using HDF5
     using MixedModels
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
     using CategoricalArrays
 
     fixture = joinpath(@__DIR__, "fixtures", "dof_glmm_bernoulli_level2.h5")
@@ -270,7 +270,7 @@ end
     :level2, :glmm
 ] begin
     using MixedModels
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
     using CategoricalArrays
 
     # Tiny Bernoulli GLMM with 3 groups of 4 obs — just enough for a stable GLMM fit
@@ -289,7 +289,7 @@ end
     # The refit loop must not mutate `m`: it deepcopies once as a working buffer
     # (docs/math/0006 §4 — the algorithm description in issue #29).
     using MixedModels
-    using cAIC: DofGLMM, MMInternals
+    using ConditionalAIC: DofGLMM, MMInternals
     using CategoricalArrays
 
     y = Float64[0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0]
@@ -319,7 +319,7 @@ end
     # Uses nboot=20 for speed; correctness is checked by the Level-2 fixture test.
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -341,7 +341,7 @@ end
 ] begin
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -359,10 +359,10 @@ end
 @testitem "dof_glmm_bootstrap: leaves the original model untouched" tags = [
     :level2, :glmm, :bootstrap
 ] begin
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM, MMInternals
+    using ConditionalAIC: DofGLMM, MMInternals
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -388,7 +388,7 @@ end
 ] begin
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -418,7 +418,7 @@ end
     # test/glmm_singularity_tests.jl.
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM, MMInternals
+    using ConditionalAIC: DofGLMM, MMInternals
 
     # Poisson GLMM: alternating [2,4] within each group → all group means = 3 → no
     # between-group variation → θ=0 → fully singular. Same construction used in
@@ -440,7 +440,7 @@ end
 ] begin
     using MixedModels
     using Random: Xoshiro
-    using cAIC: MMInternals
+    using ConditionalAIC: MMInternals
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -471,7 +471,7 @@ end
     using MixedModels
     using Random: Xoshiro
     using Statistics: mean
-    using cAIC: MMInternals
+    using ConditionalAIC: MMInternals
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -507,7 +507,7 @@ end
     using HDF5
     using MixedModels
     using Random: Xoshiro
-    using cAIC: DofGLMM
+    using ConditionalAIC: DofGLMM
 
     fixture = joinpath(@__DIR__, "fixtures", "dof_glmm_bootstrap_level2.h5")
     @test isfile(fixture)

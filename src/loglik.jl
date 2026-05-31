@@ -1,5 +1,5 @@
 """
-    cAIC.Loglik
+    ConditionalAIC.Loglik
 
 **Conditional log-likelihoods** — the first term of the conditional AIC
 (`cAIC = −2 ℓ + 2 ρ`). Pure functions of the extracted quantities `(y, ŷ)`, with **no
@@ -15,9 +15,9 @@
 
 All estimands are recorded in `docs/math/0003-conditional-loglik.md` (Gaussian) and
 `docs/math/0006-glmm-bias-correction.md §1` (Poisson, Bernoulli, multi-trial binomial);
-each is the `cAIC.jl` analogue of `cAIC4`'s `getcondLL` — except `condloglik_binomial`,
+each is the `ConditionalAIC.jl` analogue of `cAIC4`'s `getcondLL` — except `condloglik_binomial`,
 which **deviates** from `cAIC4`'s defective binomial branch (a documented `−∞` bug; see
-`docs/math/0006 §1.1` and `DECISIONS.md`).
+`docs/math/0006-glmm-bias-correction.md §1.1`).
 """
 module Loglik
 
@@ -39,10 +39,10 @@ log-likelihood is the sum of independent univariate Gaussian log-densities
   = -\\tfrac{n}{2} \\log(2π) - n \\log σ̂ - \\frac{1}{2 σ̂²} Σᵢ (yᵢ - ŷᵢ)².
 ```
 
-This is the `cAIC.jl` analogue of `cAIC4`'s `getcondLL` (which evaluates
+This is the `ConditionalAIC.jl` analogue of `cAIC4`'s `getcondLL` (which evaluates
 `sum(dnorm(y, fitted, sigma, log = TRUE))`); the conditional covariance `σ̂² Iₙ` is the
 unweighted residual covariance (all residual weights 1). It is computed in the stable
-log-space form of CLAUDE.md §9 — densities enter as `log φ`, no explicit inverse and no
+log-space form — densities enter as `log φ`, no explicit inverse and no
 determinant are formed (the diagonal `σ̂² Iₙ` collapses `logdet`/`invquad` to scalars),
 and `Σᵢ (yᵢ - ŷᵢ)²` is accumulated without materialising `y - ŷ`. The estimand is recorded
 in `docs/math/0003-conditional-loglik.md`.
@@ -65,7 +65,7 @@ in `docs/math/0003-conditional-loglik.md`.
 
 # Example
 ```jldoctest
-julia> cAIC.Loglik.condloglik([0.0], [0.0], 1.0)   # perfect fit, n = 1, σ̂ = 1
+julia> ConditionalAIC.Loglik.condloglik([0.0], [0.0], 1.0)   # perfect fit, n = 1, σ̂ = 1
 -0.9189385332046727
 ```
 """
@@ -116,7 +116,7 @@ The estimand is specified in `docs/math/0006-glmm-bias-correction.md §1`.
 
 # Example
 ```jldoctest
-julia> cAIC.Loglik.condloglik_poisson([1.0], [1.0])   # y=1, μ̂=1 → 0 − 1 − 0 = −1
+julia> ConditionalAIC.Loglik.condloglik_poisson([1.0], [1.0])   # y=1, μ̂=1 → 0 − 1 − 0 = −1
 -1.0
 ```
 """
@@ -165,7 +165,7 @@ log-likelihood is the sum of independent Bernoulli log-densities
 
 # Example
 ```jldoctest
-julia> cAIC.Loglik.condloglik_bernoulli([1.0], [0.5])   # y=1, μ̂=0.5 → log(0.5) = −log 2
+julia> ConditionalAIC.Loglik.condloglik_bernoulli([1.0], [0.5])   # y=1, μ̂=0.5 → log(0.5) = −log 2
 -0.6931471805599453
 ```
 """
@@ -205,12 +205,12 @@ with `log C(nᵢ, kᵢ) = loggamma(nᵢ+1) − loggamma(kᵢ+1) − loggamma(n�
 vanishes and this equals [`condloglik_bernoulli`](@ref).
 
 !!! note "Deviation from `cAIC4`"
-    This is **not** the `cAIC.jl` analogue of `cAIC4`'s `getcondLL`. `cAIC4`'s binomial
+    This is **not** the `ConditionalAIC.jl` analogue of `cAIC4`'s `getcondLL`. `cAIC4`'s binomial
     branch (`dbinom(y, size = length(unique(y)) − 1, prob = μ̂)`) is correct only for
     Bernoulli; for multi-trial data it passes a non-integer `x` and a wrong `size`, returns
     `0`, and yields `ℓ = −∞`. `condloglik_binomial` evaluates the **correct** binomial
-    density at the true trial counts `nᵢ` (CLAUDE.md §1/§10). The estimand and the deviation
-    are recorded in `docs/math/0006-glmm-bias-correction.md §1.1` and `DECISIONS.md`; the
+    density at the true trial counts `nᵢ`. The estimand and the deviation
+    are recorded in `docs/math/0006-glmm-bias-correction.md §1.1`; the
     Level-1 reference is base-R `dbinom(kᵢ, nᵢ, μ̂ᵢ, log = TRUE)`.
 
 # Arguments
@@ -230,7 +230,7 @@ vanishes and this equals [`condloglik_bernoulli`](@ref).
 
 # Example
 ```jldoctest
-julia> cAIC.Loglik.condloglik_binomial([0.5], [0.5], [2.0])   # k=1, n=2, μ̂=0.5 → log 0.5
+julia> ConditionalAIC.Loglik.condloglik_binomial([0.5], [0.5], [2.0])   # k=1, n=2, μ̂=0.5 → log 0.5
 -0.6931471805599453
 ```
 """

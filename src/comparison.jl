@@ -1,4 +1,4 @@
-# The anocaic comparison method. Included directly into the `cAIC` module.
+# The anocaic comparison method. Included directly into the `ConditionalAIC` module.
 # Scores a user-supplied set of LinearMixedModel fits with identical kwargs and
 # returns them sorted ascending by cAIC (best first) in an AnocaicTable.
 
@@ -29,7 +29,7 @@ Requires at least one model (zero-model calls result in a `MethodError`).
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> data = MixedModels.dataset(:sleepstudy);
 

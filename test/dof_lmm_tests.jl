@@ -7,7 +7,7 @@
     # components (written into the fixture by `generate_fixtures.R`). No R in this job —
     # the reference ρ is read straight from the committed fixture. Tolerance per CLAUDE §6.
     using HDF5
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
 
     # `rhdf5` writes an R length-1 numeric as a 1-element array, so the reference ρ comes
     # back as a `Vector` rather than a scalar; coerce it before comparing.
@@ -56,7 +56,7 @@ end
     # components **and the identical B** (written to the fixture by `generate_fixtures.R`).
     # This isolates the assembly arithmetic from how B is obtained, which differs per source.
     using HDF5
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -105,7 +105,7 @@ end
     # (no-R) CI job; enabled by `CAIC_LIVE_RCALL=1` locally and in the scheduled job.
     # Uses the same Rscript + HDF5 hand-off as the generator (ADR-0003); no `RCall.jl`.
     using HDF5
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
 
     if get(ENV, "CAIC_LIVE_RCALL", "0") == "1"
         asscalar(x) = x isa AbstractArray ? only(x) : x
@@ -157,7 +157,7 @@ end
 @testitem "dof_lmm is type-stable, generic over T, and validates component shapes" tags = [
     :level1
 ] begin
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
     using LinearAlgebra
 
     # A small, self-consistent component set built directly (no fixture / no
@@ -183,8 +183,9 @@ end
     end
 
     # A small SPD Hessian B for the numeric path (s = 1 here): `b > 0` is positive-definite.
-    spdB(::Type{T}, c) where {T} =
-        Matrix{T}(reshape([T(3)], length(c.Wlist), length(c.Wlist)))
+    spdB(::Type{T}, c) where {T} = Matrix{T}(
+        reshape([T(3)], length(c.Wlist), length(c.Wlist))
+    )
 
     # Type stability via @inferred, for both objectives and both float widths — both the
     # analytic (`dof_lmm`) and numeric (`dof_lmm_numeric`) entry points.
@@ -238,7 +239,7 @@ end
     # No R in this job — the reference ρ is read straight from the committed fixture.
     # Tolerance per CLAUDE §6 (Level-1: rtol = 1e-6, atol = 1e-10).
     using HDF5
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -277,7 +278,7 @@ end
     # example, type-stability checked at Float32/Float64, and the validation guards
     # are exercised. The shared-input cAIC4-parity test (above) covers parity against
     # cAIC4's reference; this test covers the formula, types, and guards in isolation.
-    using cAIC: DofLMM
+    using ConditionalAIC: DofLMM
 
     # Hand-computed synthetic: n=2, B=2, sigma=1, sigmapenalty=0; `yhat` does not enter
     # the formula (carried for signature symmetry — see efron_penalty docstring).

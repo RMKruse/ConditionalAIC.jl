@@ -9,7 +9,7 @@
 # the repeated-name `cnms` form lme4 uses (a *correlated* `(1+x|g)` is one two-label entry; an
 # *uncorrelated* `(1+x||g)` is two single-label entries), the `backwardStep` transform runs there,
 # and each surviving candidate is lifted back to a `RESpec`. The `lm`/`glm` terminal (§0.1) is not
-# a `RESpec` ([`render`](@ref cAIC.render) rejects an empty spec), so it is represented by an
+# a `RESpec` ([`render`](@ref ConditionalAIC.render) rejects an empty spec), so it is represented by an
 # **empty** returned vector — the image of `cAIC4`'s `NA` return.
 #
 # See docs/math/0008-stepcaic-search.md §2 for the spec and the Level-1 set-equality oracle.
@@ -645,7 +645,7 @@ end
 One greedy step of a [`stepcaic`](@ref) search — its direction, the incumbent cAIC at the start
 of the step, **every** candidate scored that step ([`ScoredCandidate`](@ref)), the `argmin`
 index into them, and whether the best candidate was accepted (`minCAIC ≤ incumbentcaic`). The
-structured analogue of `cAIC4`'s printed `trace` (the *Search path* of `CONTEXT.md`).
+structured analogue of `cAIC4`'s printed `trace` — the search path of the greedy walk.
 """
 struct StepRecord{T<:AbstractFloat}
     direction::Symbol
@@ -686,8 +686,8 @@ The result of a conditional stepwise search ([`stepcaic`](@ref)).
 - `selected::CAICResult{T,M}` — the conditional-AIC score of the selected model.
 - `model::M` — the selected fitted model (a `MixedModel`, or the `lm`/`glm` terminal at the
   bottom of the lattice).
-- `path::Vector{StepRecord{T}}` — the per-step search trace, in order (the *Search path* of
-  `CONTEXT.md`, replacing `cAIC4`'s printed `trace`).
+- `path::Vector{StepRecord{T}}` — the per-step search trace, in order (the search path,
+  replacing `cAIC4`'s printed `trace`).
 - `saved::Vector{CAICResult{T}}` — the k-best scores (`savedmodels`): the distinct models scored
   across the whole search, deduplicated by random-effects structure and ranked by cAIC ascending
   (the selected model is the first element). The default `savedmodels = 1` carries the selected
@@ -951,8 +951,9 @@ function _runstepcaic(
         CAICResult{T}[savedpool[i] for i in order[1:min(nsave, length(order))]]
     end
 
-    result(res, model, selkey) =
-        StepcaicResult(res, model, path, finalsaved(selkey, res), options)
+    result(res, model, selkey) = StepcaicResult(
+        res, model, path, finalsaved(selkey, res), options
+    )
 
     stepsleft = options.steps
     while stepsleft > 0
@@ -1184,10 +1185,12 @@ function stepcaic(
     lhs = MMInternals.responseterm(m)
     dist = MMInternals.glmmdist(m)
     wts = MMInternals.glmmpriorweights(m)
-    score(model) =
-        caic(model; method, nboot, rng)::CAICResult{T,GeneralizedLinearMixedModel{T,D}}
-    refitcand(c) =
-        fit(MixedModel, render(c, fixed, lhs), data, dist; weights=wts, progress=false)
+    score(model) = caic(
+        model; method, nboot, rng
+    )::CAICResult{T,GeneralizedLinearMixedModel{T,D}}
+    refitcand(c) = fit(
+        MixedModel, render(c, fixed, lhs), data, dist; weights=wts, progress=false
+    )
     terminalfit() = (
         tm=GLM.glm(_StatsModels.FormulaTerm(lhs, fixed), data, dist; wts=wts);
         (tm, caic(tm))

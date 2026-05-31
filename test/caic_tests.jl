@@ -6,7 +6,7 @@
     # `CAICResult`. The behaviour asserted is the assembly identity cAIC = −2ℓ + 2ρ
     # (doc 0002 §1); a wiring break anywhere along the spine breaks it.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -27,7 +27,7 @@ end
     # an independent path from `Components`' Woodbury `V₀⁻¹`/`A` build, so this also
     # cross-checks that the bridge reproduces the hat-matrix trace.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -49,7 +49,7 @@ end
     # and the default B-source is the closed-form `:analytic`. This provenance lets candidate
     # models be checked for consistent scoring downstream.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -71,7 +71,7 @@ end
     # dropping it to 0 (known error variance) must lower ρ — and hence the cAIC penalty 2ρ —
     # by exactly 1.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -90,7 +90,7 @@ end
     # The result is a user-facing return value; its text/plain rendering must surface the
     # headline cAIC and the scoring provenance rather than the raw struct dump.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -111,7 +111,7 @@ end
     # silently-wrong number. Covers the unknown enum values, a negative penalty count, and
     # the two `nboot` misuses (supplied off the bootstrap path; non-positive on it).
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -134,7 +134,7 @@ end
     # end-to-end: a seeded, low-B run must return a CAICResult satisfying the cAIC identity
     # cAIC = −2ℓ + 2ρ. No convergence assertion here — that is Cycle 8.
     using MixedModels, Random
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -154,7 +154,7 @@ end
     # Provenance check (issue #12): the bootstrap path uses no Hessian B, so bsource must
     # be :na (not applicable) and method must be :bootstrap.
     using MixedModels, Random
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -175,7 +175,7 @@ end
     # two calls on the default (global) RNG must produce different dof with overwhelming
     # probability (probability 1 − 2^{−52} for any nboot ≥ 1).
     using MixedModels, Random
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -195,7 +195,7 @@ end
 
 @testitem "caic bootstrap: type-stable via @inferred" tags = [:level2, :bootstrap] begin
     using MixedModels, Random
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -212,7 +212,7 @@ end
     # Mutation contract: bootstrap refits are on fresh models; the original θ̂ must be
     # untouched after caic returns (same contract as the :finitediff B-source).
     using MixedModels, Random
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -234,7 +234,7 @@ end
     # When method=:bootstrap is used without nboot, the default (500 draws, matching
     # cAIC4) must be used rather than erroring. The result must satisfy the cAIC identity.
     using MixedModels, Random
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -258,7 +258,7 @@ end
     # Memory: do NOT tighten this tolerance; the bootstrap does not converge to analytic df
     # (see bootstrap-not-equal-analytic.md).
     using MixedModels, Random
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -282,7 +282,7 @@ end
     # mutation contract — leave the fit at its fitted θ̂ (the self-driven FD path perturbs and
     # restores; a leftover perturbation would poison the score).
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -321,7 +321,7 @@ end
     # (`:finitediff ≡ cAIC4 analytic = FALSE` — the *correctness*-tight pair — is the Level-2
     # gate above; here the comparison is purely among the three Julia sources, no R.)
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     data = MixedModels.dataset(:sleepstudy)
     ρ(m, src) = caic(m; hessian=src).dof
@@ -380,7 +380,7 @@ end
     # CAICResult rather than throw. Uses a small synthetic dataset (32 obs) for speed;
     # comprehensive wiring tests are in caic_glmm_tests.jl.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     y = Float64[
         0,
@@ -433,7 +433,7 @@ end
     # the compiler resolves `caic` to a concrete `CAICResult{Float64,…}` with no Any/Union
     # fallback. A helper with no kwargs gives `@inferred` a clean call to infer.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -454,7 +454,7 @@ end
     # still resolves to a concrete `CAICResult{Float64,…}` with no Any/Union fallback. A
     # per-source helper with no kwargs gives `@inferred` a clean call to infer.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -480,7 +480,7 @@ end
     # branch (ρ's nθ = n vs n−p, and σ̂'s denominator in the conditional log-lik). Both must
     # respond; a regression that ignored the flag (e.g. always ML) would leave them identical.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -509,7 +509,7 @@ end
     # flip a REML fit to ML to score it. Observable contract: the REML flag and θ̂ are
     # byte-identical before and after scoring.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -531,7 +531,7 @@ end
     # resolves to a concrete `CAICResult{Float64,…}` with no Any/Union fallback from the
     # `isREML` dispatch.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     m = fit(
         MixedModel,
@@ -559,7 +559,7 @@ end
     # A genuine machinery error shifts caic by ≥ O(0.1) — well outside this band.
     using HDF5
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     # rhdf5 stores an R length-1 numeric as a 1-element array; coerce before comparing.
     asscalar(x) = x isa AbstractArray ? only(x) : x
@@ -613,7 +613,7 @@ end
     # `:forwarddiff` source is deliberately **not** compared here (it diverges — see DECISIONS).
     using HDF5
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -659,7 +659,7 @@ end
     # the same Rscript + HDF5 hand-off as the generator (no `RCall.jl`).
     using HDF5
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     if get(ENV, "CAIC_LIVE_RCALL", "0") == "1"
         asscalar(x) = x isa AbstractArray ? only(x) : x

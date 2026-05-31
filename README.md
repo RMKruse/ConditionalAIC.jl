@@ -1,11 +1,11 @@
-# cAIC.jl
+# ConditionalAIC.jl
 
 Conditional Akaike Information Criterion and conditional model selection for
 mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl).
 
-`cAIC.jl` is a Julia re-platforming of R's
+`ConditionalAIC.jl` is a Julia re-platforming of R's
 [`cAIC4`](https://cran.r-project.org/package=cAIC4). Where `cAIC4` sits on
-`lme4`/`merMod`, `cAIC.jl` sits on `MixedModels.jl` — its
+`lme4`/`merMod`, `ConditionalAIC.jl` sits on `MixedModels.jl` — its
 `LinearMixedModel` and `GeneralizedLinearMixedModel`. The work is to
 reconstruct `cAIC4`'s bias-correction and degrees-of-freedom logic on top of the
 fitted objects `MixedModels.jl` produces, validated against `cAIC4` as ground
@@ -40,7 +40,7 @@ from the repository:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/RMKruse/cAIC.jl")
+Pkg.add(url="https://github.com/RMKruse/ConditionalAIC.jl")
 ```
 
 Requires Julia ≥ 1.10 (LTS). `MixedModels` and `GLM` are pinned to exact
@@ -65,7 +65,7 @@ A Gaussian `LinearMixedModel` is scored via the analytic Greven–Kneib bias
 correction; a `GeneralizedLinearMixedModel` via its family-specific df route.
 
 ```julia
-using MixedModels, cAIC
+using MixedModels, ConditionalAIC
 
 m = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)),
         MixedModels.dataset(:sleepstudy); REML=false, progress=false)
@@ -120,7 +120,7 @@ display(res)                      # the full report (the summaryMA port)
 
 ## Status
 
-`cAIC.jl` is under active development toward feature parity with `cAIC4`.
+`ConditionalAIC.jl` is under active development toward feature parity with `cAIC4`.
 [`PARITY.md`](PARITY.md) is the authoritative scope matrix; current state:
 
 | Capability | Milestone | Status |
@@ -134,7 +134,7 @@ display(res)                      # the full report (the summaryMA port)
 | v1.0 / registration | M6 | ⬜ planned |
 
 Every estimator is validated against `cAIC4` on **two levels**: Level 1 feeds
-identical synthetic inputs into `cAIC4`'s internal functions and the `cAIC.jl`
+identical synthetic inputs into `cAIC4`'s internal functions and the `ConditionalAIC.jl`
 kernels (tight tolerance); Level 2 fits the same model in both stacks and
 compares the full cAIC within a fit-discrepancy-justified tolerance. Divergences
 from R are recorded in [`DECISIONS.md`](DECISIONS.md); the mathematical
@@ -150,7 +150,7 @@ file reaches into a `MixedModels` object's internals.
 
 ```
 src/
-  cAIC.jl          # module entry point + public exports
+  ConditionalAIC.jl          # module entry point + public exports
   mm_internals.jl  # the only MixedModels-internals touchpoint
   numerics.jl      # numerically-stable primitives
   loglik.jl        # conditional log-likelihood

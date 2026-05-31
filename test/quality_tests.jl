@@ -5,7 +5,7 @@
     # ForwardDiff/FiniteDiff back the M2 numeric Hessian B-sources, now wired through
     # `mm_internals.jl`'s `bhessian` (ADR-0002, #11), so they are no longer stale.
     # Statistics is declared ahead of use (later slices).
-    Aqua.test_all(cAIC; stale_deps=(ignore=[:Statistics],))
+    Aqua.test_all(ConditionalAIC; stale_deps=(ignore=[:Statistics],))
 end
 
 @testitem "JET static analysis" begin
@@ -16,15 +16,15 @@ end
         using JET
 
         JET.test_package(
-            cAIC;
+            ConditionalAIC;
             target_modules=(
-                cAIC,
-                cAIC.MMInternals,
-                cAIC.Numerics,
-                cAIC.Loglik,
-                cAIC.DofLMM,
-                cAIC.DofGLMM,
-                cAIC.Components,
+                ConditionalAIC,
+                ConditionalAIC.MMInternals,
+                ConditionalAIC.Numerics,
+                ConditionalAIC.Loglik,
+                ConditionalAIC.DofLMM,
+                ConditionalAIC.DofGLMM,
+                ConditionalAIC.Components,
             ),
         )
     else

@@ -1,7 +1,7 @@
 # The RE-structure spec (`cnms` analogue) and its extract/render round-trip — the
 # fit-independent representation the `stepcaic` search (M4) enumerates over. Included
-# directly into the `cAIC` module. `extract` reads the structural truth `m.formula`
-# through the [`cAIC.MMInternals`](@ref) quarantine; `render` rebuilds a formula from the
+# directly into the `ConditionalAIC` module. `extract` reads the structural truth `m.formula`
+# through the [`ConditionalAIC.MMInternals`](@ref) quarantine; `render` rebuilds a formula from the
 # **public** StatsModels/MixedModels term API (no internals). See
 # `docs/math/0008-stepcaic-search.md` §1.
 
@@ -10,7 +10,7 @@ using MixedModels: zerocorr
 # StatsModels' public term constructors (`term`, `FormulaTerm`), reached through the
 # already-direct `GLM` dependency's loaded copy — the same module MixedModels builds
 # formulas with — so `render` adds no separate StatsModels dependency (mirrors the
-# `TableRegressionModel` alias in `cAIC.jl`).
+# `TableRegressionModel` alias in `ConditionalAIC.jl`).
 const _StatsModels = GLM.StatsModels
 
 """
@@ -37,11 +37,11 @@ end
 """
     RESpec(groups::Vector{REGroup})
 
-The fit-independent random-effects structure of a candidate — the `cAIC4` `cnms` analogue
-(CONTEXT.md *RE-structure spec*). An ordered list of [`REGroup`](@ref)s, one per
+The fit-independent random-effects structure of a candidate — the `cAIC4` `cnms` analogue.
+An ordered list of [`REGroup`](@ref)s, one per
 random-effects term of a formula. The `stepcaic` search enumerates neighbours by pure
 add/drop transforms on a `RESpec` and renders it back to a formula only at fit time
-([`render`](@ref cAIC.render)); [`extract`](@ref cAIC.extract) is the inverse read.
+([`render`](@ref ConditionalAIC.render)); [`extract`](@ref ConditionalAIC.extract) is the inverse read.
 
 Compared **by value** (`==`, field-wise over `groups`): structural equality, the round-trip
 oracle of `docs/math/0008-stepcaic-search.md` §1.4.
@@ -60,7 +60,7 @@ Base.:(==)(a::RESpec, b::RESpec) = a.groups == b.groups
 
 Read a fitted model's random-effects structure into a [`RESpec`](@ref) — the `cAIC4`
 `getComponents` analogue. Reads `m.formula` (the structural truth, not the fit-mutated
-`m.reterms`) through the [`cAIC.MMInternals`](@ref) quarantine and wraps the per-term
+`m.reterms`) through the [`ConditionalAIC.MMInternals`](@ref) quarantine and wraps the per-term
 `(grouping, directions, correlated)` tuples into [`REGroup`](@ref)s.
 
 # Example
@@ -85,8 +85,8 @@ Parse a `keep` formula fragment into the [`RESpec`](@ref) floor the backward [`s
 search must not drop below — the Julia analogue of `cAIC4`'s `keep\$random` (`interpret.random`).
 `keep` is a `FormulaTerm` whose right-hand side carries the random-effects bars to pin (e.g.
 `@formula(y ~ (1 | batch))`); its response and any fixed-effects terms are ignored. The bars are
-schema-applied against `data` (through the [`cAIC.MMInternals`](@ref) quarantine) and wrapped into
-[`REGroup`](@ref)s, exactly as [`extract`](@ref cAIC.extract) does for a fitted model.
+schema-applied against `data` (through the [`ConditionalAIC.MMInternals`](@ref) quarantine) and wrapped into
+[`REGroup`](@ref)s, exactly as [`extract`](@ref ConditionalAIC.extract) does for a fitted model.
 
 # Throws
 - `ArgumentError` if `keep` carries no random-effects term — a `keep` floor with nothing to pin is
@@ -110,8 +110,8 @@ end
 
 Rebuild a model formula from a [`RESpec`](@ref) — the `cAIC4` `cnmsConverter` + `makeFormula`
 analogue. The unchanged fixed-effects term `fixed` and response `lhs` (from
-[`fixedterm`](@ref cAIC.MMInternals.fixedterm) / [`responseterm`](@ref
-cAIC.MMInternals.responseterm)) are reattached, and each group is rendered via the **public**
+[`fixedterm`](@ref ConditionalAIC.MMInternals.fixedterm) / [`responseterm`](@ref
+ConditionalAIC.MMInternals.responseterm)) are reattached, and each group is rendered via the **public**
 term API: each `"(Intercept)"` ↦ `term(1)`, each slope `s` ↦ `term(Symbol(s))`, with a
 trailing `term(0)` appended when no intercept is present (`cnmsConverter`'s `"0"`); the
 directions are grouped `… | term(grouping)` and wrapped in `zerocorr` when uncorrelated.

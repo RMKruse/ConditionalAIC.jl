@@ -17,13 +17,13 @@
 # fixtured.
 #
 # The Julia Level-2 test (`glmm_partial_singularity_tests.jl`) reads y/x/g + references from
-# this fixture, fits MixedModels.jl, runs `cAIC.caic` (which cascades the boundary reduction),
+# this fixture, fits MixedModels.jl, runs `ConditionalAIC.caic` (which cascades the boundary reduction),
 # and compares within atol = 1e-3 (the Level-2 tolerance; fit discrepancies between lme4 and
 # MixedModels.jl propagate into the cAIC).
 #
 # Run this FIRST, then `Rscript test/generate_fixtures_glmm_singular.R`.
 #
-# Usage:  julia --project=/path/to/cAIC.jl test/generate_fixtures_glmm_singular.jl
+# Usage:  julia --project=/path/to/ConditionalAIC.jl test/generate_fixtures_glmm_singular.jl
 
 using HDF5
 using MixedModels

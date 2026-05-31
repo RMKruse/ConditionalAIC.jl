@@ -1,8 +1,8 @@
 """
-    cAIC.Numerics
+    ConditionalAIC.Numerics
 
-Pure, numerically-stable numerical primitives the conditional AIC is assembled from
-(CLAUDE.md §9). **No `MixedModels` dependency** — this module is importable and testable
+Pure, numerically-stable numerical primitives the conditional AIC is assembled from.
+**No `MixedModels` dependency** — this module is importable and testable
 in isolation, and every kernel is generic over `T <: AbstractFloat`.
 
 Each kernel computes its quantity via the *stable* formulation (log-space, Cholesky-based
@@ -12,7 +12,7 @@ inputs at the Level-1 tolerance. The mathematical identities are recorded in
 `docs/math/0001-numerics-primitives.md`.
 
 These kernels are consumed by `loglik`, the Level-1 df port, and the scoring spine; they
-are internal helpers and are not part of the public `cAIC` export surface.
+are internal helpers and are not part of the public `ConditionalAIC` export surface.
 """
 module Numerics
 
@@ -29,7 +29,8 @@ identity
 \\operatorname{tr}(AB) = \\sum_i \\sum_k A_{ik} B_{ki}
 ```
 
-(equivalently `Σ A .* Bᵀ`; CLAUDE.md §9). The accumulating double sum touches each entry
+(equivalently `Σ A .* Bᵀ`), so the trace is computed without materialising the product.
+The accumulating double sum touches each entry
 of `A` and `B` once and allocates nothing, where `tr(A * B)` would form the `m×m`
 product first. `A` is `m×n` and `B` is `n×m`; the empty contraction returns zero.
 
@@ -45,7 +46,7 @@ product first. `A` is `m×n` and `B` is `n×m`; the empty contraction returns ze
 
 # Example
 ```jldoctest
-julia> cAIC.Numerics.traceprod([1.0 2.0; 3.0 4.0], [5.0 6.0; 7.0 8.0])
+julia> ConditionalAIC.Numerics.traceprod([1.0 2.0; 3.0 4.0], [5.0 6.0; 7.0 8.0])
 70.0
 ```
 """
@@ -56,8 +57,8 @@ function traceprod(A::AbstractMatrix, B::AbstractMatrix)
         ),
     )
     # Allocation-free reduction of the trace identity. A manual loop is the justified
-    # form here (CLAUDE.md §12): the "vectorized" `sum(A .* transpose(B))` would
-    # allocate an m×n temporary, defeating the §9 "without materialising" mandate.
+    # form here: the "vectorized" `sum(A .* transpose(B))` would allocate an m×n
+    # temporary, defeating the "without materialising the product" guarantee.
     s = zero(eltype(A)) * zero(eltype(B))
     @inbounds for k in axes(A, 2), i in axes(A, 1)
         s += A[i, k] * B[k, i]
@@ -76,8 +77,8 @@ factor `A = L Lᵀ` via
 \\log\\det(A) = 2 \\sum_i \\log L_{ii},
 ```
 
-in log-space and **never** as `log(det(A))` (CLAUDE.md §9: `logdet` on a
-Cholesky/triangular factor, never `det` of a large or near-singular matrix). The
+in log-space and **never** as `log(det(A))` — `logdet` on a Cholesky/triangular factor,
+never `det` of a large or near-singular matrix. The
 factor is obtained with `cholesky(Symmetric(A))`; pass a `Cholesky` directly to reuse
 an existing factor without refactorising (§9).
 
@@ -95,7 +96,7 @@ an existing factor without refactorising (§9).
 
 # Example
 ```jldoctest
-julia> cAIC.Numerics.logdetpd([4.0 1.0; 1.0 3.0])
+julia> ConditionalAIC.Numerics.logdetpd([4.0 1.0; 1.0 3.0])
 2.3978952727983707
 ```
 """
@@ -122,7 +123,7 @@ logdetpd(C::Cholesky) = logdet(C)
     invquad(C::Cholesky, x::AbstractVector) -> eltype
 
 Quadratic form `xᵀ A⁻¹ x` for symmetric positive-definite `A = L Lᵀ`, computed by a
-Cholesky **solve** and **never** by forming an explicit inverse (CLAUDE.md §9/§12):
+Cholesky **solve** and **never** by forming an explicit inverse:
 
 ```math
 x^{\\mathsf T} A^{-1} x = \\lVert L^{-1} x \\rVert^2,
@@ -146,7 +147,7 @@ refactorising (§9).
 
 # Example
 ```jldoctest
-julia> cAIC.Numerics.invquad([4.0 0.0; 0.0 2.0], [2.0, 2.0])
+julia> ConditionalAIC.Numerics.invquad([4.0 0.0; 0.0 2.0], [2.0, 2.0])
 3.0
 ```
 """
@@ -172,8 +173,8 @@ Numerically-stable log of a sum of exponentials,
 ```
 
 which keeps every exponent `≤ 0` so the sum neither overflows nor underflows to zero,
-where the naive `log(sum(exp, x))` overflows once any `xᵢ` is large (CLAUDE.md §9:
-log-space, never sum raw products of small numbers). Delegates to
+where the naive `log(sum(exp, x))` overflows once any `xᵢ` is large — the computation
+stays in log-space and never sums raw products of small numbers. Delegates to
 `LogExpFunctions.logsumexp`; this is the package's vetted log-space entry point, used by
 the GLMM log-space accumulations.
 
@@ -186,7 +187,7 @@ the GLMM log-space accumulations.
 
 # Example
 ```jldoctest
-julia> cAIC.Numerics.logsumexp([0.0, 0.0])
+julia> ConditionalAIC.Numerics.logsumexp([0.0, 0.0])
 0.6931471805599453
 ```
 """

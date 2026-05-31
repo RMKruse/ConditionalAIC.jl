@@ -1,4 +1,4 @@
-# Result type for the scoring path. Included directly into the `cAIC` module (not a
+# Result type for the scoring path. Included directly into the `ConditionalAIC` module (not a
 # submodule): `CAICResult` is part of the public surface and is returned by `caic`.
 # `RegressionModel` is imported at the module top.
 
@@ -129,7 +129,7 @@ Returned by [`getweights`](@ref).
 
 The Zhang (2014) Mallows criterion J(w) = (y − μw)ᵀ(y − μw) + 2σ̂²(ρᵀw) is minimised
 over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
-Lagrangian SQP of `cAIC4`'s `.weightOptim` (ADR-0007, docs/math/0009 §2).
+Lagrangian SQP of `cAIC4`'s `.weightOptim` (docs/math/0009 §2).
 
 - `weights::Vector{T}` — the optimal model-averaging weights; non-negative and summing to 1.
 - `objective::T` — the minimised Mallows criterion J(ŵ) (the `functionvalue` of `getWeights`).

@@ -6,7 +6,7 @@
 # sets and writes them to an HDF5 file. The R side (`generate_fixtures.R`) then reads this
 # file, calls `cAIC4`'s `calculateGaussianBc` on each case, and writes the reference ρ
 # back into the same file. CI reads the resulting fixture in Julia with **no R** and
-# compares against `cAIC.DofLMM.dof_lmm` at the Level-1 tolerance.
+# compares against `ConditionalAIC.DofLMM.dof_lmm` at the Level-1 tolerance.
 #
 # Neutral hand-off (ADR-0003): HDF5 gives a binary-exact Float64 round-trip. The
 # computation-bearing matrices `A`, `V0inv`, `Wⱼ = Z Dⱼ Zᵀ` are **symmetric**, so they
@@ -246,7 +246,7 @@ function write_fixture(path, cases)
             end
         end
         meta = create_group(f, "meta")
-        meta["generator"] = "cAIC.jl test/generate_fixtures.jl"
+        meta["generator"] = "ConditionalAIC.jl test/generate_fixtures.jl"
         meta["julia_version"] = string(VERSION)
         meta["hdf5_jll_version"] = string(HDF5.API.h5_get_libversion())
     end

@@ -11,20 +11,20 @@
 # canonical term-string (an uncorrelated group expands to one single-label term per direction). The
 # slope/group candidates are stored as comma strings ("" = none) and parsed to `Vector{Symbol}`.
 @testsnippet ForwardFixtures begin
-    using cAIC
+    using ConditionalAIC
     using HDF5
 
     const FIXTURE = joinpath(@__DIR__, "fixtures", "stepcaic_forward_level1.h5")
 
     function parsespec(s)
-        groups = cAIC.REGroup[]
+        groups = ConditionalAIC.REGroup[]
         for grp in split(s, ";")
             meta, dirs = split(grp, ":")
             nm = Symbol(replace(meta, r"/cor=.*" => ""))
             cor = parse(Int, replace(meta, r".*cor=" => "")) == 1
-            push!(groups, cAIC.REGroup(nm, String.(split(dirs, ",")), cor))
+            push!(groups, ConditionalAIC.REGroup(nm, String.(split(dirs, ",")), cor))
         end
-        return cAIC.RESpec(groups)
+        return ConditionalAIC.RESpec(groups)
     end
 
     function canon(spec)
@@ -60,7 +60,7 @@
     end
 
     function candidateset(sc)
-        cands = cAIC.forwardcandidates(
+        cands = ConditionalAIC.forwardcandidates(
             sc.spec;
             slopecandidates=sc.slopes,
             groupcandidates=sc.groups,
@@ -72,9 +72,10 @@
     end
 
     # Scenario names are every group except the non-scenario fixtures.
-    scenarionames() = h5open(FIXTURE, "r") do f
-        [k for k in keys(f) if !(k in ("meta", "nest", "isnested"))]
-    end
+    scenarionames() =
+        h5open(FIXTURE, "r") do f
+            [k for k in keys(f) if !(k in ("meta", "nest", "isnested"))]
+        end
 end
 
 @testitem "adds a new grouping factor" setup = [ForwardFixtures] begin
@@ -158,7 +159,7 @@ end
     ForwardFixtures
 ] begin
     sc = scenario("no_candidates")
-    @test isempty(cAIC.forwardcandidates(sc.spec))   # NULL terminal
+    @test isempty(ConditionalAIC.forwardcandidates(sc.spec))   # NULL terminal
     @test sc.expected == Set{String}()
 end
 
@@ -175,14 +176,14 @@ end
 
 @testitem "forwardcandidates is type-stable" setup = [ForwardFixtures] begin
     sc = scenario("add_slope")
-    @test (@inferred Vector{cAIC.RESpec} cAIC.forwardcandidates(
+    @test (@inferred Vector{ConditionalAIC.RESpec} ConditionalAIC.forwardcandidates(
         sc.spec; slopecandidates=[:days]
-    )) isa Vector{cAIC.RESpec}
+    )) isa Vector{ConditionalAIC.RESpec}
 end
 
 @testitem "forwardcandidates rejects maxslopes < 1" setup = [ForwardFixtures] begin
-    spec = cAIC.RESpec([cAIC.REGroup(:subj, ["(Intercept)"], true)])
-    @test_throws ArgumentError cAIC.forwardcandidates(spec; maxslopes=0)
+    spec = ConditionalAIC.RESpec([ConditionalAIC.REGroup(:subj, ["(Intercept)"], true)])
+    @test_throws ArgumentError ConditionalAIC.forwardcandidates(spec; maxslopes=0)
 end
 
 @testitem "_allnestsubs expands nesting expressions like allNestSubs" setup = [
@@ -192,9 +193,9 @@ end
         (read(f["nest/expr"]), read(f["nest/expected"]))
     end
     for (e, exp) in zip(exprs, expected)
-        @test cAIC._allnestsubs(e) == String.(split(exp, ","))
+        @test ConditionalAIC._allnestsubs(e) == String.(split(exp, ","))
     end
-    @test cAIC._allnestsubs("a/b") == ["b:a", "a"]
+    @test ConditionalAIC._allnestsubs("a/b") == ["b:a", "a"]
 end
 
 @testitem "isnested matches reformulas::isNested" setup = [ForwardFixtures] begin
@@ -207,7 +208,7 @@ end
             g = f["isnested"][name]
             (read(g["f1"]), read(g["f2"]), only(read(g["expected"])))
         end
-        @test cAIC.isnested(f1, f2) == (expected == 1)
+        @test ConditionalAIC.isnested(f1, f2) == (expected == 1)
     end
-    @test_throws ArgumentError cAIC.isnested([1, 2, 3], [1, 2])
+    @test_throws ArgumentError ConditionalAIC.isnested([1, 2, 3], [1, 2])
 end

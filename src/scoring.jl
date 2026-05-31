@@ -1,10 +1,10 @@
 # The conditional-AIC scoring assembly (the `caic` methods). Included directly into the
-# `cAIC` module: these methods extend the `caic` generic and wire the spine together —
+# `ConditionalAIC` module: these methods extend the `caic` generic and wire the spine together —
 #   MMInternals (extract) → Components (build) → DofLMM (ρ) + Loglik (ℓ) → CAICResult.
 # All `MixedModels`-object access is via `MMInternals`; this file touches only its
 # extracted arrays and the pure kernels.
 #
-# (Named `scoring.jl`, not `caic.jl`: the latter collides with the module entry `cAIC.jl`
+# (Named `scoring.jl`, not `caic.jl`: the latter collides with the module entry `ConditionalAIC.jl`
 # on a case-insensitive filesystem.)
 
 const _METHODS = (:auto, :steinian, :bootstrap)
@@ -22,7 +22,7 @@ Score a fitted Gaussian linear mixed model by its **conditional AIC**
 
 the analogue of `cAIC4`'s `cAIC`. The conditional log-likelihood `ℓ_cond` is the Gaussian
 density of `y` about the conditional fitted mean `ŷ = X β̂ + Z b̂`
-([`condloglik`](@ref cAIC.Loglik.condloglik)); `ρ` is the bias-corrected effective degrees
+([`condloglik`](@ref ConditionalAIC.Loglik.condloglik)); `ρ` is the bias-corrected effective degrees
 of freedom, computed by the selected `method`. The mathematics is pinned in
 `docs/math/0002-gaussian-bias-correction.md` (Greven–Kneib correction) and
 `0003-conditional-loglik.md` (the log-likelihood).
@@ -58,7 +58,7 @@ force-refit).
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> m = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)),
                MixedModels.dataset(:sleepstudy); REML=false, progress=false);
@@ -77,7 +77,7 @@ function caic(
     sigmapenalty::Integer=1,
     rng::AbstractRNG=default_rng(),
 ) where {T}
-    # ── option validation (fail loudly; CLAUDE §4) ──────────────────────────────────────
+    # ── option validation (fail loudly) ──────────────────────────────────────
     method in _METHODS ||
         throw(ArgumentError("method must be one of $(_METHODS); got :$(method)"))
     hessian in _BSOURCES ||
@@ -171,9 +171,9 @@ end
 # quarantine, build the Gaussian components, and return the bias-corrected effective degrees
 # of freedom ρ and the conditional log-likelihood ℓ. Shared by the non-singular path and the
 # reduced-model (singular) path. The B-source selects how the Greven–Kneib Hessian B is
-# obtained: `:analytic` from the closed form ([`dof_lmm`](@ref cAIC.DofLMM.dof_lmm)),
-# `:forwarddiff` / `:finitediff` numerically ([`bhessian`](@ref cAIC.MMInternals.bhessian),
-# fed to [`dof_lmm_numeric`](@ref cAIC.DofLMM.dof_lmm_numeric)). All feed the *same* assembly.
+# obtained: `:analytic` from the closed form ([`dof_lmm`](@ref ConditionalAIC.DofLMM.dof_lmm)),
+# `:forwarddiff` / `:finitediff` numerically ([`bhessian`](@ref ConditionalAIC.MMInternals.bhessian),
+# fed to [`dof_lmm_numeric`](@ref ConditionalAIC.DofLMM.dof_lmm_numeric)). All feed the *same* assembly.
 function _steinian(m::LinearMixedModel{T}, sigmapenalty::Integer, hessian::Symbol) where {T}
     y = MMInternals.responsevec(m)
     μ = MMInternals.conditionalmean(m)
@@ -207,20 +207,20 @@ Score a fitted **generalized** linear mixed model by its **conditional AIC**
 
 The conditional log-likelihood `ℓ_cond` is the log-probability of `y` under the
 conditional response distribution `f(μ̂)` (Poisson: [`condloglik_poisson`](@ref
-cAIC.Loglik.condloglik_poisson); Bernoulli: [`condloglik_bernoulli`](@ref
-cAIC.Loglik.condloglik_bernoulli); multi-trial Binomial: [`condloglik_binomial`](@ref
-cAIC.Loglik.condloglik_binomial), which deviates from `cAIC4`'s defective binomial
-`getcondLL` — see `DECISIONS.md`). The effective df `ρ` is estimated by the method
+ConditionalAIC.Loglik.condloglik_poisson); Bernoulli: [`condloglik_bernoulli`](@ref
+ConditionalAIC.Loglik.condloglik_bernoulli); multi-trial Binomial: [`condloglik_binomial`](@ref
+ConditionalAIC.Loglik.condloglik_binomial), which deviates from `cAIC4`'s defective binomial
+`getcondLL`). The effective df `ρ` is estimated by the method
 selected by `method`:
 
 - **`:auto`** (the default) dispatches by family:
   - **Poisson** → Chen–Stein influence df ([`dof_glmm_poisson`](@ref
-    cAIC.DofGLMM.dof_glmm_poisson)), the `cAIC4` `biasCorrectionPoisson` analogue.
+    ConditionalAIC.DofGLMM.dof_glmm_poisson)), the `cAIC4` `biasCorrectionPoisson` analogue.
   - **Bernoulli** → Efron's Steinian df ([`dof_glmm_bernoulli`](@ref
-    cAIC.DofGLMM.dof_glmm_bernoulli)), the `cAIC4` `biasCorrectionBernoulli` analogue.
+    ConditionalAIC.DofGLMM.dof_glmm_bernoulli)), the `cAIC4` `biasCorrectionBernoulli` analogue.
   - Other families: `ArgumentError` — use `method = :bootstrap`.
 - **`:bootstrap`** → conditional bootstrap df ([`dof_glmm_bootstrap`](@ref
-  cAIC.DofGLMM.dof_glmm_bootstrap)). Works for every bootstrap-supported family (Poisson,
+  ConditionalAIC.DofGLMM.dof_glmm_bootstrap)). Works for every bootstrap-supported family (Poisson,
   Bernoulli, multi-trial Binomial — the families `glmmconddraw` can simulate). `nboot` sets
   the draw count (default `max(n, 100)`).
 
@@ -250,7 +250,7 @@ The estimand and algorithm are pinned in `docs/math/0006-glmm-bias-correction.md
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> y = Float64[1,1,2,1, 8,9,8,9, 3,4,3,4]; g = repeat(1:3, inner=4);
 
@@ -414,8 +414,8 @@ the terminal is a deterministic closed form — so the result carries `method = 
 Supported terminals mirror M2/M3: the Gaussian `lm` (σ̂ the MLE rescaling
 `summary(·)\$sigma·√((n−p)/n)`, i.e. `√(RSS/n)`), and the Poisson / Bernoulli / multi-trial
 Binomial `glm`. The Binomial branch reuses [`condloglik_binomial`](@ref
-cAIC.Loglik.condloglik_binomial) (the corrected density, deviating from `cAIC4`'s defective
-multi-trial `getcondLL`; see `DECISIONS.md`); for the Bernoulli case it reduces to and matches
+ConditionalAIC.Loglik.condloglik_binomial) (the corrected density, deviating from `cAIC4`'s defective
+multi-trial `getcondLL`); for the Bernoulli case it reduces to and matches
 `cAIC4` exactly. The estimand is pinned in `docs/math/0008-stepcaic-search.md §0`.
 
 # Arguments
@@ -431,7 +431,7 @@ multi-trial `getcondLL`; see `DECISIONS.md`); for the Bernoulli case it reduces 
 
 # Example
 ```jldoctest
-julia> using GLM, cAIC
+julia> using GLM, ConditionalAIC
 
 julia> data = (; x=[-1.0, -0.3, 0.2, 0.8, 1.4], y=[0.1, 0.9, 1.6, 2.1, 3.0]);
 

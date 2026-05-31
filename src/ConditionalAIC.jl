@@ -1,5 +1,5 @@
 """
-    cAIC
+    ConditionalAIC
 
 Conditional Akaike Information Criterion and conditional model selection for
 mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl)
@@ -9,13 +9,13 @@ mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStat
 via the analytic Greven–Kneib bias correction (M2), a `GeneralizedLinearMixedModel`
 via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3), or — as the
 terminal node a backward `stepcaic` search reaches when the last random-effects term is dropped —
-a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`, M4 / ADR-0006). All assemble into
+a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`, M4). All assemble into
 a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5),
 returning an [`AnocaicTable`](@ref). [`stepcaic`](@ref) runs conditional stepwise random-effects
 selection (M4, backward direction), returning a [`StepcaicResult`](@ref). All access to
-`MixedModels.jl` internals is quarantined in the [`cAIC.MMInternals`](@ref) submodule.
+`MixedModels.jl` internals is quarantined in the [`ConditionalAIC.MMInternals`](@ref) submodule.
 """
-module cAIC
+module ConditionalAIC
 
 using MixedModels:
     MixedModel,
@@ -83,4 +83,4 @@ export caic,
     ModelAvgResult,
     WeightResult
 
-end # module cAIC
+end # module ConditionalAIC

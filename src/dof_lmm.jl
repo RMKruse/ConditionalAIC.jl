@@ -1,19 +1,19 @@
 """
-    cAIC.DofLMM
+    ConditionalAIC.DofLMM
 
 Greven–Kneib bias-corrected **effective degrees of freedom** ρ for a Gaussian linear
 mixed model — the port of `cAIC4`'s `calculateGaussianBc` (`analytic = TRUE`).
 
-This module is the **Level-1 isolation unit** (ADR-0003): a *pure, fit-independent,
+This module is the **Level-1 isolation unit**: a *pure, fit-independent,
 parametrisation-neutral* map from a component set ([`GaussianComponents`](@ref)) to the
 scalar ρ. It touches **no** `MixedModels` object; it consumes dense components in
 `cAIC4`'s `getModelComponents.merMod` layout and reproduces the exact arithmetic of
 `calculateGaussianBc`. The mathematics is pinned in `docs/math/0002-gaussian-bias-correction.md`
 (§3 the component layout, §4 the closed-form B/C and the ρ assembly).
 
-Every kernel uses the numerically-stable [`cAIC.Numerics`](@ref) primitives: the Fisher
+Every kernel uses the numerically-stable [`ConditionalAIC.Numerics`](@ref) primitives: the Fisher
 trace term `tr(Wⱼ M Wₖ M)` is formed by `traceprod` without materialising the product,
-and `Λ̂ʸ = B⁻¹C` is a factorisation-based solve with no explicit inverse (CLAUDE §9).
+and `Λ̂ʸ = B⁻¹C` is a factorisation-based solve with no explicit inverse.
 """
 module DofLMM
 
@@ -28,7 +28,7 @@ using ..Numerics: traceprod
 The Gaussian-LMM bias-correction component set, in `cAIC4`'s `getModelComponents.merMod`
 layout (`docs/math/0002` §3). All matrices are dense and parametrisation-neutral — this
 type carries *no* `θ`-vector and no fitted model, so the correction arithmetic is tested
-in isolation from any fit (ADR-0003). Targets the **unweighted** Gaussian path
+in isolation from any fit. Targets the **unweighted** Gaussian path
 (`R = Iₙ`, so `R A = A`), the M2 scope; weighted Gaussian is deferred, matching `cAIC4`.
 
 The number of observations is `n = length(e)`, the number of free covariance components
@@ -58,7 +58,7 @@ struct GaussianComponents{T<:AbstractFloat}
     isREML::Bool
 
     # Validate that every component has a mutually-consistent shape; an inconsistent set
-    # would otherwise produce a silently-wrong ρ downstream. Fail loudly (CLAUDE §4).
+    # would otherwise produce a silently-wrong ρ downstream. Fail loudly.
     function GaussianComponents{T}(
         X::Matrix{T},
         e::Vector{T},
@@ -101,7 +101,7 @@ function GaussianComponents(
     return GaussianComponents{T}(X, e, A, V0inv, Wlist, eWelist, tye, isREML)
 end
 
-# Λ̂ʸ = B⁻¹C as a factorisation-based solve — never an explicit inverse (CLAUDE §9).
+# Λ̂ʸ = B⁻¹C as a factorisation-based solve — never an explicit inverse.
 # B is the positive-definite negative profile-(restricted-)likelihood Hessian (doc 0002
 # §5), so a Cholesky solve is the stable primary path; a symmetric (Bunch–Kaufman) solve
 # is the fallback when B is not numerically positive-definite (θ near the boundary).
@@ -155,7 +155,7 @@ The Greven–Kneib term `Σⱼ …` corrects `ρ₀ = tr(H₁)` for the estimati
 
 # Example
 ```jldoctest
-julia> using cAIC.DofLMM: GaussianComponents, dof_lmm
+julia> using ConditionalAIC.DofLMM: GaussianComponents, dof_lmm
 
 julia> using LinearAlgebra: I, tr
 

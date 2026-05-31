@@ -1,6 +1,6 @@
 # Level-2 end-to-end tests for the greedy `stepcaic` driver (M4 §4.1, #40). Each fits the same
 # model `cAIC4`'s `stepcAIC` was driven on (test/generate_fixtures_stepcaic_driver.R) with
-# `MixedModels.jl`, runs `cAIC.stepcaic`, and asserts the selected RE structure (authored from
+# `MixedModels.jl`, runs `ConditionalAIC.stepcaic`, and asserts the selected RE structure (authored from
 # cAIC4's decision — the fixture's `finalformula` is its provenance, grouping names differ across
 # packages) plus `selected.caic ≈ bestCAIC` within the Level-2 fit-discrepancy band.
 
@@ -9,7 +9,7 @@
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
 
     # rhdf5 stores an R length-1 numeric as a 1-element array; coerce before comparing.
     asscalar(x) = x isa AbstractArray ? only(x) : x
@@ -60,7 +60,7 @@ end
     using HDF5
     using MixedModels
     using GLM: lm
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -110,7 +110,7 @@ end
     using MixedModels
     using GLM: lm, StatsModels
     using Random: Xoshiro
-    using cAIC: caic, stepcaic
+    using ConditionalAIC: caic, stepcaic
 
     # An unsupported single-grouping model: `y ~ 1 + x + (1|g)` over data with NO true group
     # effect. The backward search reaches the single random intercept, descends to the `lm`
@@ -156,7 +156,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -217,7 +217,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -261,7 +261,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -330,7 +330,7 @@ end
     using HDF5
     using MixedModels
     using GLM: glm, Poisson
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -392,7 +392,7 @@ end
 @testitem "stepcaic GLMM bootstrap-family search is reproducible under a fixed rng (crossed multi-trial Binomial)" begin
     using MixedModels
     using Random: Xoshiro
-    using cAIC: caic, stepcaic, StepcaicResult
+    using ConditionalAIC: caic, stepcaic, StepcaicResult
 
     # Multi-trial Binomial has no analytic df (cAIC4's getcondLL is defective for nᵢ > 1; the M3
     # path uses the corrected `condloglik_binomial` — DECISIONS 2026-05-29). Under `method=:auto`
@@ -461,7 +461,7 @@ end
     using MixedModels
     using GLM: glm, Binomial
     using Random: Xoshiro
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     # CBPP: a single random-intercept multi-trial Binomial GLMM `incid/hsz ~ period + (1 | herd)`
     # (trial counts `hsz` are the prior weights). Backward's only neighbour is the no-RE `glm`
@@ -514,7 +514,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -557,7 +557,7 @@ end
 ] begin
     using MixedModels
     using GLM: lm
-    using cAIC: caic, stepcaic
+    using ConditionalAIC: caic, stepcaic
 
     # Cycle 6 enrichment: every scored candidate in the path carries its effective degrees of
     # freedom ρ (`dof`) alongside its cAIC — the `df` column `cAIC4`'s `stepcAIC` trace/`aicTab`
@@ -599,7 +599,7 @@ end
 
 @testitem "stepcaic skipnonconverged is inert when every candidate converges (Pastes)" begin
     using MixedModels
-    using cAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
 
     data = MixedModels.dataset(:pastes)
     m = fit(
@@ -626,12 +626,13 @@ end
 @testitem "stepcaic skipnonconverged excludes a non-converged candidate (selection + saved)" begin
     using MixedModels
     using GLM: lm, StatsModels
-    using cAIC: caic, extract, render, RESpec, REGroup, backwardcandidates, StepcaicOptions
+    using ConditionalAIC:
+        caic, extract, render, RESpec, REGroup, backwardcandidates, StepcaicOptions
     # The driver is exercised directly: no public `stepcaic` knob can deterministically force a
     # *candidate refit* to report non-convergence, so the test injects a refit closure that taints
     # one candidate's optimizer return code. Everything else (greedy walk, `converged`, scoring) is
     # the real machinery — this isolates the `skipnonconverged` exclusion branch.
-    using cAIC: _runstepcaic, MMInternals
+    using ConditionalAIC: _runstepcaic, MMInternals
 
     data = MixedModels.dataset(:pastes)
     m = fit(
@@ -660,8 +661,9 @@ end
     )
 
     # savedmodels = 0 keeps all distinct scored models; the rest are a plain backward run.
-    opts(skip) =
-        StepcaicOptions(:backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false)
+    opts(skip) = StepcaicOptions(
+        :backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false
+    )
 
     noskip = _runstepcaic(
         Float64, m, score, tainted_refit, terminalfit, gencands, opts(false); keep=nothing

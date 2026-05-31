@@ -56,7 +56,7 @@ end
     # is dropped, the reduced model is refitted, and the cAIC is computed on *that*. The
     # result records the reduction (`refit`) and carries the reduced model.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel, @formula(y ~ 1 + x + (1 + x | g)), partialcorr_data(); progress=false
@@ -80,7 +80,7 @@ end
     # retained), so this guards that reconstruction against any drift: the objective and the
     # covariance parameters θ must agree to optimiser tolerance.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     data = partialcorr_data()
     m = fit(MixedModel, @formula(y ~ 1 + x + (1 + x | g)), data; progress=false)
@@ -102,7 +102,7 @@ end
     # reduces to (1 | g₁). The surviving term must be g₁ — its grouping, levels, and the
     # fixed effects untouched.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel, @formula(y ~ 1 + (1 | g1) + (1 | g2)), twoterm_data(); progress=false
@@ -123,7 +123,7 @@ end
     # non-singular fit. The well-conditioned sleepstudy fit is scored as given — no reduced
     # model, no refit flag — and the result still satisfies the cAIC identity.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -149,8 +149,8 @@ end
     # singular 2×2 fit, so only the cascade reaches a non-singular model. This drives the
     # while-loop in `caic`, mirroring `cAIC4`'s recursive `deleteZeroComponents`.
     using MixedModels
-    using cAIC: caic
-    using cAIC: cAIC
+    using ConditionalAIC: caic
+    using ConditionalAIC: ConditionalAIC
 
     m = fit(
         MixedModel,
@@ -161,7 +161,7 @@ end
     @test issingular(m)
 
     # one reduction is *not* enough — the intermediate model is still on the boundary
-    once = cAIC.MMInternals.reduceboundary(m)
+    once = ConditionalAIC.MMInternals.reduceboundary(m)
     @test issingular(once)
 
     reduced = caic(m).reducedmodel
@@ -177,7 +177,7 @@ end
     # one: ρ = p + sigmapenalty, the conditional log-likelihood is that of the original fit at
     # b̂ = 0 (μ = Xβ̂), and no reduced model is carried.
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     m = fit(
         MixedModel,
@@ -211,7 +211,7 @@ end
     # `CAICResult{Float64,LinearMixedModel{Float64}}`, so `caic` stays type-stable on a
     # singular fit just as on an interior one.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     scoreit(model) = caic(model)
 
@@ -254,7 +254,7 @@ end
     # ≥ O(0.1) — well outside the band.
     using HDF5
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     # rhdf5 stores an R length-1 numeric as a 1-element array; coerce before comparing.
     asscalar(x) = x isa AbstractArray ? only(x) : x

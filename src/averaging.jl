@@ -1,5 +1,5 @@
 # The model-averaging assembly (`modelavg` + `getweights`). Included directly into the
-# `cAIC` module. Port of `cAIC4`'s `modelAvg` / `getWeights` restricted to Gaussian
+# `ConditionalAIC` module. Port of `cAIC4`'s `modelAvg` / `getWeights` restricted to Gaussian
 # `LinearMixedModel` candidates (docs/math/0009-model-averaging.md).
 #
 # Public surface:
@@ -33,7 +33,7 @@ otherwise — the fail-loud strengthening of `cAIC4`'s unchecked `getME(m[[1]], 
 - `m1, rest...`: one or more fitted Gaussian `LinearMixedModel` objects of the same float
   type.
 - `weights`: the weight scheme. `:zhang` (the default) is the Zhang-optimal Mallows-criterion
-  weights via the transcribed `solnp` SQP (ADR-0007; docs/math/0009 §1–2). `:smoothed` is the
+  weights via the transcribed `solnp` SQP (docs/math/0009 §1–2). `:smoothed` is the
   Buckland (1997) exponential-cAIC smoothed weights `wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2)`,
   `Δᵢ = cAICᵢ − min cAIC`, computed in log-space.
 - `method, hessian, nboot, sigmapenalty`: forwarded unchanged to [`caic`](@ref) for every
@@ -52,7 +52,7 @@ otherwise — the fail-loud strengthening of `cAIC4`'s unchecked `getME(m[[1]], 
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> data = MixedModels.dataset(:sleepstudy);
 
@@ -155,8 +155,8 @@ end
 
 # ── Buckland smoothed weights (docs/math/0009 §3), log-space ─────────────────
 # wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2) with Δᵢ = cAICᵢ − min cAIC. This is softmax(−cAIC/2): the
-# min-subtraction is absorbed by the logsumexp normalisation (CLAUDE §9 — the vetted
-# log-space entry point), exact-equivalent to the R `exp(-delta/2)/sum(exp(-delta/2))`.
+# min-subtraction is absorbed by the logsumexp normalisation (the vetted log-space
+# entry point), exact-equivalent to the R `exp(-delta/2)/sum(exp(-delta/2))`.
 function _bucklandweights(caics::AbstractVector{T}) where {T}
     x = caics ./ (-2)
     return exp.(x .- Numerics.logsumexp(x))
@@ -249,7 +249,7 @@ but `ŷ^MA` is invariant across the flat optimum directions (docs/math/0009 §7)
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> data = MixedModels.dataset(:sleepstudy);
 
@@ -288,7 +288,7 @@ J(w) = (y - \\mu w)^{\\!\\top}(y - \\mu w) + 2\\hat\\sigma^2(\\rho^{\\!\\top} w)
 ```
 
 over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
-Lagrangian SQP of `cAIC4`'s `.weightOptim` (ADR-0007; docs/math/0009 §2).
+Lagrangian SQP of `cAIC4`'s `.weightOptim` (docs/math/0009 §2).
 
 `σ̂²` is taken from the candidate with the largest effective df (full-precision ρᵢ from
 `caic`; cf. cAIC4's `which.max(modelcAIC\$df)`, docs/math/0009 §6.1).
@@ -303,7 +303,7 @@ Lagrangian SQP of `cAIC4`'s `.weightOptim` (ADR-0007; docs/math/0009 §2).
 
 # Example
 ```jldoctest
-julia> using MixedModels, cAIC
+julia> using MixedModels, ConditionalAIC
 
 julia> data = MixedModels.dataset(:sleepstudy);
 

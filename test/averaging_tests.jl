@@ -5,7 +5,7 @@
     # Two sleepstudy candidates differing in RE structure are scored and combined; the
     # exponential-cAIC weights must form a probability vector (non-negative, sum to 1).
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult, caic
+    using ConditionalAIC: modelavg, ModelAvgResult, caic
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -45,7 +45,7 @@ end
     # only (Intercept). The averaged fixeff is keyed on the union of coefficient names; a
     # term present in only one candidate equals that candidate's weight × coefficient.
     using MixedModels
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -83,7 +83,7 @@ end
     # only. The averaged raneff is keyed on (grouping factor, level, RE term); a (level,
     # term) present in only one candidate equals that candidate's weight × mode.
     using MixedModels
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -128,7 +128,7 @@ end
     # The fail-loud candidate-set contract (docs/math/0009 §0): mismatched observation count,
     # a differing response on the same n, and a mixed REML setting each raise ArgumentError.
     using MixedModels
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     sleep = MixedModels.dataset(:sleepstudy)
     m_ml = fit(
@@ -178,7 +178,7 @@ end
     # cAIC4 model averaging is Gaussian-LMM only (docs/math/0009 §0/§1): a GLMM candidate
     # hits the fail-loud MixedModel fallback rather than a MethodError.
     using MixedModels
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     y = repeat([0, 1, 1, 0, 1, 0, 1, 1], outer=4)
     g = repeat(1:4, inner=8)
@@ -190,7 +190,7 @@ end
     # Type stability of the assembly (CLAUDE §8) despite the heterogeneous raneftables walk
     # being behind a function barrier, plus a Base.show smoke check.
     using MixedModels, Test
-    using cAIC: modelavg, ModelAvgResult
+    using ConditionalAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -233,7 +233,7 @@ end
     # inherit the M2 band; modelAvg(opt=FALSE) additionally rounds cAIC to 2 digits before
     # weighting (anocAIC, methods.R:63), absorbed by the measured band (DECISIONS 2026-05-31).
     using MixedModels, HDF5
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3
@@ -276,18 +276,18 @@ end
     # Tracer bullet (CLAUDE §7 step 3): WeightResult{T} is defined, has the documented
     # fields, and the M=1 degenerate case returns weights=[1.0] (docs/math/0009 §2.3).
     using MixedModels
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
-    @test isconcretetype(cAIC.WeightResult{Float64})
-    @test fieldnames(cAIC.WeightResult) == (:weights, :objective, :duration)
+    @test isconcretetype(ConditionalAIC.WeightResult{Float64})
+    @test fieldnames(ConditionalAIC.WeightResult) == (:weights, :objective, :duration)
 
     # M=1 degenerate: ŵ = (1), J = (y-μ₁)ᵀ(y-μ₁) + 2σ²ρ₁ — no optimizer needed
     y = [1.0, 2.0, 3.0]
     mu = reshape([1.5, 2.0, 2.8], 3, 1)    # 3×1 matrix
     rho = [2.5]
     sigma_sq = 1.2
-    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
-    @test res isa cAIC.WeightResult{Float64}
+    res = ConditionalAIC._getweights_raw(y, mu, rho, sigma_sq)
+    @test res isa ConditionalAIC.WeightResult{Float64}
     @test res.weights ≈ [1.0]
     expected_J = sum((y - mu[:, 1]) .^ 2) + 2 * sigma_sq * rho[1]
     @test res.objective ≈ expected_J
@@ -304,7 +304,7 @@ end
     # Tolerance rtol=1e-6 (docs/math/0009 §7 target; relaxed band recorded in DECISIONS
     # at implementation if the iterative stopping band forces it).
     using HDF5
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     L1_RTOL = 1e-6
     L1_ATOL = 1e-10
@@ -319,7 +319,7 @@ end
     r_weights = h5read(fixture, "case1/outputs_r/weights")
     r_objective = only(h5read(fixture, "case1/outputs_r/objective"))
 
-    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+    res = ConditionalAIC._getweights_raw(y, mu, rho, sigma_sq)
 
     @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
     # Renormalized onto the unit simplex: sums to 1 to machine precision, not just the
@@ -333,7 +333,7 @@ end
     :level1
 ] begin
     using HDF5
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     L1_RTOL = 1e-6
     L1_ATOL = 1e-10
@@ -348,7 +348,7 @@ end
     r_weights = h5read(fixture, "case2/outputs_r/weights")
     r_objective = only(h5read(fixture, "case2/outputs_r/objective"))
 
-    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+    res = ConditionalAIC._getweights_raw(y, mu, rho, sigma_sq)
 
     @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
     # Renormalized onto the unit simplex: sums to 1 to machine precision, not just the
@@ -365,7 +365,7 @@ end
     # call getweights to optimize Zhang weights. The result must be a WeightResult{Float64}
     # with non-negative weights summing to 1.
     using MixedModels
-    using cAIC: modelavg, getweights, WeightResult, ModelAvgResult
+    using ConditionalAIC: modelavg, getweights, WeightResult, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -397,7 +397,7 @@ end
 
 @testitem "getweights is type-stable" tags = [:level1] begin
     using MixedModels, Test
-    using cAIC: modelavg, getweights, WeightResult
+    using ConditionalAIC: modelavg, getweights, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -425,7 +425,7 @@ end
     # modelavg(...; weights=:zhang) uses the Zhang optimizer internally and stores
     # the WeightResult in the returned ModelAvgResult (weighttype=:zhang).
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult
+    using ConditionalAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -457,7 +457,7 @@ end
     # Fixture-rot guard: regenerate the Level-1 Zhang fixture with live cAIC4
     # and verify the committed fixture has not drifted. Skipped unless CAIC_LIVE_RCALL=1.
     using HDF5
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     if get(ENV, "CAIC_LIVE_RCALL", "0") == "1"
         here = @__DIR__
@@ -488,7 +488,7 @@ end
     # cAIC4's modelAvg(opt=TRUE) default. Calling modelavg without the weights kwarg
     # must produce weighttype == :zhang, not :smoothed.
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult
+    using ConditionalAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -519,7 +519,7 @@ end
     # (weights, objective, duration) so callers can inspect J(ŵ) without re-scoring.
     # The :smoothed path stores nothing (weightresult === nothing).
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult, WeightResult
+    using ConditionalAIC: modelavg, ModelAvgResult, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -552,7 +552,7 @@ end
     # When modelavg was called with :zhang, getweights should return the already-computed
     # WeightResult directly (no re-running caic). Result is identical to res.weightresult.
     using MixedModels
-    using cAIC: modelavg, getweights, WeightResult
+    using ConditionalAIC: modelavg, getweights, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -587,7 +587,7 @@ end
     # committed fixture. Band = max(lme4↔MM fit discrepancy, §6.1 df-rounding perturbation);
     # measured and recorded in DECISIONS.md.
     using MixedModels, HDF5
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-2  # wider than Buckland (1e-3): absorbs df-rounding perturbation
@@ -632,7 +632,7 @@ end
     # This exercises the full modelavg(:zhang) pipeline with M=1, ensuring the short-circuit
     # propagates correctly through the scoring, sigma_sq, and effect-averaging steps.
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult, WeightResult
+    using ConditionalAIC: modelavg, ModelAvgResult, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -665,7 +665,7 @@ end
     # _bucklandweights([c]) = exp(0)/1 = [1.0]: the Δᵢ=0 term gives weight 1 to the sole
     # candidate regardless of its absolute cAIC value.
     using MixedModels
-    using cAIC: modelavg, ModelAvgResult
+    using ConditionalAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -693,7 +693,7 @@ end
     # on the first LM-ramp step, exercising the @warn + early-return branch. The fallback
     # must: (a) emit exactly the documented warning, and (b) return a NamedTuple with finite p.
     using LinearAlgebra, Test
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     T = Float64
     nw = 2
@@ -722,7 +722,7 @@ end
     # Negative-definite Hessian: cholesky(Symmetric(-I + 0·D)) throws immediately
     hess_nd = -Matrix{T}(I, nw, nw)
 
-    res = @test_logs (:warn, r"Cholesky decomposition failed") cAIC._weightoptim(
+    res = @test_logs (:warn, r"Cholesky decomposition failed") ConditionalAIC._weightoptim(
         w0, zero(T), T[funv, eqv], hess_nd, zero(T), scaler, find_weights, equB, lowb, uppb
     )
     @test length(res.p) == nw
@@ -734,10 +734,10 @@ end
 ] begin
     # When all candidates carry the same cAIC, Δᵢ=0 for every i, so wᵢ=1/M (maximum
     # entropy). The log-space computation must not introduce rounding asymmetries.
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     for M in (2, 3, 5)
-        w = cAIC._bucklandweights(fill(42.7, M))
+        w = ConditionalAIC._bucklandweights(fill(42.7, M))
         @test length(w) == M
         @test w ≈ fill(1.0 / M, M)
         @test sum(w) ≈ 1.0
@@ -750,7 +750,7 @@ end
     # When every ρᵢ=0, the penalty 2σ²(ρᵀw)=0 regardless of w and the Mallows criterion
     # reduces to pure RSS minimisation. The optimizer must still converge to a weight vector
     # on the unit simplex (non-negative, sum=1) with a finite, non-negative objective.
-    using cAIC: cAIC
+    using ConditionalAIC: ConditionalAIC
 
     T = Float64
     y = T[1.0, 2.0, 3.0]
@@ -758,9 +758,9 @@ end
     rho = zeros(T, 2)           # all-zero effective-df: penalty term drops out
     sigma_sq = T(1.2)
 
-    res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
+    res = ConditionalAIC._getweights_raw(y, mu, rho, sigma_sq)
 
-    @test res isa cAIC.WeightResult{T}
+    @test res isa ConditionalAIC.WeightResult{T}
     @test length(res.weights) == 2
     @test all(≥(-1e-10), res.weights)
     @test sum(res.weights) ≈ 1.0 atol = 1e-8
@@ -780,7 +780,7 @@ end
     # at Level-1 by forcing a negative-definite Hessian (DECISIONS 2026-05-31). This test pins
     # the honest end-to-end behavior: a simplex-valid weight is returned with NO warning fired.
     using MixedModels, Test, Logging
-    using cAIC: modelavg, ModelAvgResult, WeightResult
+    using ConditionalAIC: modelavg, ModelAvgResult, WeightResult
 
     data = MixedModels.dataset(:sleepstudy)
     f = @formula(reaction ~ 1 + days + (1 + days | subj))
@@ -809,7 +809,7 @@ end
     # Degenerate-input guard (CLAUDE §4 fail-loud): only :zhang and :smoothed are supported
     # weight schemes. Any other symbol must raise ArgumentError, not silently fall through.
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -831,7 +831,7 @@ end
     # branch. M=1 routes through the nw==1 short-circuit in _getweights_raw, a different code
     # path than the M≥2 optimizer; it must still infer to a concrete ModelAvgResult{Float64}.
     using MixedModels, Test
-    using cAIC: modelavg, ModelAvgResult
+    using ConditionalAIC: modelavg, ModelAvgResult
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -856,7 +856,7 @@ end
     # weighted sum of each candidate's conditional prediction, ŷ^MA = Σ wᵢ predict(mᵢ, D*)
     # (docs/math/0009 §5; port of cAIC4's `w %*% t(sapply(models, predict, newdata))`).
     using MixedModels
-    using cAIC: modelavg, predictma
+    using ConditionalAIC: modelavg, predictma
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -893,7 +893,7 @@ end
     # (overriding MixedModels' own :missing default). The error originates in
     # MixedModels.predict and propagates through the weighted combination.
     using MixedModels
-    using cAIC: modelavg, predictma
+    using ConditionalAIC: modelavg, predictma
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -927,7 +927,7 @@ end
     # the weighted combination of each candidate's population (fixed-effects-only for that row)
     # prediction — and must NOT error.
     using MixedModels
-    using cAIC: modelavg, predictma
+    using ConditionalAIC: modelavg, predictma
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -967,7 +967,7 @@ end
     # MixedModels.predict's new_re_levels-dependent return type (constant-propagated default
     # :error keeps the eltype Float64, not Union{Float64,Missing}).
     using MixedModels, Test
-    using cAIC: modelavg, predictma
+    using ConditionalAIC: modelavg, predictma
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1009,7 +1009,7 @@ end
     # fit discrepancy on the response scale; DECISIONS 2026-05-31). A wrong combination shifts
     # predictions by O(1)+ ms — orders of magnitude above this band.
     using MixedModels, HDF5
-    using cAIC: modelavg, predictma
+    using ConditionalAIC: modelavg, predictma
 
     L2_ATOL_PRED = 5e-3
     L2_ATOL_CAIC = 1e-3
@@ -1137,7 +1137,7 @@ end
     # The display of a ModelAvgResult (port of cAIC4's summaryMA, folded into Base.show)
     # prints a "Model Averaged Fixed Effects" block listing each averaged coefficient name.
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1168,7 +1168,7 @@ end
     # `round(·; digits=6)` (matching cAIC4's summaryMA `round(o$weights, digits = 6)`),
     # one row per candidate.
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1202,7 +1202,7 @@ end
     # candidate's formula under a "Candidate models" heading, in input order (a recorded
     # divergence from summaryMA; docs/math/0009 §5).
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1234,7 +1234,7 @@ end
     # corrected "Model Averaged Random Effects" heading (summaryMA's copy-pasted "...Fixed
     # Effects" label is an upstream bug, not transcribed; ADR-0007 decision 3).
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(
@@ -1265,7 +1265,7 @@ end
     # auto-display ultimately routes through — and the candidate models + averaged fixed
     # effects appear in the output.
     using MixedModels, Test
-    using cAIC: modelavg
+    using ConditionalAIC: modelavg
 
     data = MixedModels.dataset(:sleepstudy)
     m1 = fit(

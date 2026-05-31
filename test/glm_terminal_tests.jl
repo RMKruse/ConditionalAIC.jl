@@ -13,7 +13,7 @@
     # discrepancy is far inside the Level-2 band (see DECISIONS.md).
     using HDF5
     using GLM: lm, @formula
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3   # the Level-2 gate (DECISIONS.md); the OLS terminal sits far inside it
@@ -45,7 +45,7 @@ end
     # same Poisson MLE (discrepancy far inside the Level-2 band).
     using HDF5
     using GLM: glm, @formula, Poisson, LogLink
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3
@@ -76,7 +76,7 @@ end
     # multi-trial data — that case is scored by the corrected kernel and validated separately).
     using HDF5
     using GLM: glm, @formula, Bernoulli, LogitLink
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3
@@ -110,7 +110,7 @@ end
     # the trial counts are recovered from the fit's prior weights.
     using HDF5
     using GLM: glm, @formula, Binomial, LogitLink
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3
@@ -138,7 +138,7 @@ end
 @testitem "caic on a Gaussian lm terminal is type-stable (@inferred)" begin
     using Test
     using GLM: lm, @formula
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     data = (; x=[-1.0, -0.3, 0.2, 0.8, 1.4], y=[0.1, 0.9, 1.6, 2.1, 3.0])
     m = lm(@formula(y ~ 1 + x), data)
@@ -154,7 +154,7 @@ end
     # so the inner kernel call is statically known once the family method is selected.
     using Test
     using GLM: glm, @formula, Poisson, LogLink, Bernoulli, Binomial, LogitLink
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     x = [-1.0, -0.3, 0.2, 0.8, 1.4]
 
@@ -187,7 +187,7 @@ end
     # other family (here a Gamma `glm`) must fail loudly rather than return a silently-wrong number.
     using Test
     using GLM: glm, @formula, Gamma, InverseLink
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     x = [-1.0, -0.3, 0.2, 0.8, 1.4]
     m = glm(@formula(y ~ 1 + x), (; x, y=[0.5, 1.0, 1.5, 2.0, 3.0]), Gamma(), InverseLink())

@@ -6,7 +6,7 @@
 # R side (`generate_fixtures_bootstrap.R`) reads it, evaluates `cAIC4`'s
 # `conditionalBootstrap` bias-correction arithmetic on each case, and writes the
 # reference `rho_ref` back. CI reads the resulting fixture in Julia with **no R** and
-# compares against `cAIC.DofLMM.efron_penalty` at the Level-1 tolerance
+# compares against `ConditionalAIC.DofLMM.efron_penalty` at the Level-1 tolerance
 # (rtol = 1e-6, atol = 1e-10).
 #
 # Why the inputs are synthetic, not from a real bootstrap: `conditionalBootstrap`'s
@@ -119,7 +119,7 @@ function write_bootstrap_fixture(path, cases)
             g["B"] = size(c.Ystar, 2)
         end
         meta = create_group(f, "meta")
-        meta["generator"] = "cAIC.jl test/generate_fixtures_bootstrap.jl"
+        meta["generator"] = "ConditionalAIC.jl test/generate_fixtures_bootstrap.jl"
         meta["julia_version"] = string(VERSION)
         meta["hdf5_jll_version"] = string(HDF5.API.h5_get_libversion())
     end

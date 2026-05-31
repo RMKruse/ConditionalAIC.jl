@@ -1,5 +1,5 @@
 """
-    cAIC.MMInternals
+    ConditionalAIC.MMInternals
 
 **Quarantine module — the single, auditable touchpoint for `MixedModels.jl` internals.**
 
@@ -65,14 +65,14 @@ first.
 | `MixedModels.ZeroCorr` (`.term`) | type/field | [`reterminfo`] | an uncorrelated `zerocorr` term; unwrapped to its inner `RandomEffectsTerm` |
 | `MatrixTerm` (`.terms`), `InterceptTerm{B}`, `CategoricalTerm.sym`, `termvars` | StatsModels types/fns | [`reterminfo`], [`fixedterm`] | RE-direction labels (`"(Intercept)"`/slope names), grouping symbol, fixed-part identification |
 
-**Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
+**Experimental surface.** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
 `MixedModels`' *experimental* AD surface; the docs warn that which parameters are
 differentiated alongside θ may change, which would silently alter B's dimension, so
 [`bhessian`] shape-asserts the `s×s` result against the `=5.5.1` pin. The companion
 `FiniteDiff.finite_difference_hessian(::LinearMixedModel)` extension is **deliberately not
 accessed** — the `:finitediff` source self-drives `FiniteDiff` over the stable
-`objective!`/`setθ!`/`updateL!` trio instead (ADR-0002).
+`objective!`/`setθ!`/`updateL!` trio instead.
 """
 module MMInternals
 
@@ -161,7 +161,7 @@ the comparison.
 `lme4` flags non-convergence with a richer gradient/Hessian check (its `optinfo` convergence
 code);
 `MixedModels.jl` exposes only the optimizer return code, so this is the faithful analogue
-available — a documented divergence (DECISIONS.md). Works for both `LinearMixedModel` and
+available — a documented divergence. Works for both `LinearMixedModel` and
 `GeneralizedLinearMixedModel` (each carries its own `optsum`).
 """
 function converged(m::MixedModel)
@@ -395,12 +395,12 @@ log-likelihood for ML, the REML criterion for REML) — the scale `cAIC4`'s `ana
 path consumes (`docs/math/0004` §1, §3). `s = length(m.θ)`. Dispatches on `source`:
 
 - `:finitediff` — **self-driven** finite differences over `MixedModels`' *stable*
-  `objective!`/`setθ!`/`updateL!` API (ADR-0002), **not** `MixedModelsFiniteDiffExt`.
+  `objective!`/`setθ!`/`updateL!` API, **not** `MixedModelsFiniteDiffExt`.
   `objective!(m, θ)` mutates `m`, so `FiniteDiff` leaves it parked at its last probe; the
   driver restores θ̂ in a `finally` and **fails loud** if the restoration did not take — a
   Hessian computed against a silently-mutated fit is a defect (`docs/math/0004` §3b).
 - `:forwarddiff` — rides the **experimental** `MixedModelsForwardDiffExt`
-  (`ForwardDiff.hessian(m)`), the only B-source on experimental surface (ADR-0002). It
+  (`ForwardDiff.hessian(m)`), the only B-source on experimental surface. It
   differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing
   of `docs/math/0004` §3a; the result type is shape-asserted against the `=5.5.1` pin.
 
@@ -462,7 +462,7 @@ covariance parameters re-estimated from scratch) and return the conditional fitt
 `ŷ* = Xβ̂* + Zb̂*` of the new fit. The REML flag of `m` is preserved so the bootstrap
 objective matches the original.
 
-Used by the `:bootstrap` df path in [`caic`](@ref cAIC.caic): each bootstrap draw refits
+Used by the `:bootstrap` df path in [`caic`](@ref ConditionalAIC.caic): each bootstrap draw refits
 with full θ re-estimation, so the covariance penalty captures the estimation-uncertainty
 correction (not just the naive ρ₀).
 
@@ -753,7 +753,7 @@ a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Berno
 non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
 
 Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
-distribution for conditional bootstrap draws (`docs/math/0006` §5; ADR-0005).
+distribution for conditional bootstrap draws (`docs/math/0006` §5).
 """
 function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
     wts = m.resp.wts
@@ -768,7 +768,7 @@ Draw `B` conditional bootstrap samples from the GLMM response distribution, hold
 random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
 an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
 
-Per ADR-0005, draws directly from `f(μ̂ᵢ)`:
+Draws directly from `f(μ̂ᵢ)`:
 - **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
 - **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
   [`glmmpriorweights`](@ref).
@@ -932,7 +932,7 @@ end
     responseterm(m::MixedModel)
 
 The response (left-hand-side) term of `m.formula` (`m.formula.lhs`) — supplied to
-[`render`](@ref cAIC.render) as the `lhs` of the rebuilt formula. Read from the structural
+[`render`](@ref ConditionalAIC.render) as the `lhs` of the rebuilt formula. Read from the structural
 truth `m.formula` (quarantine), no shape assertion: any `StatsModels` term is a valid `lhs`.
 """
 responseterm(m::MixedModel) = m.formula.lhs
@@ -941,8 +941,8 @@ responseterm(m::MixedModel) = m.formula.lhs
     fixedterm(m::MixedModel) -> StatsModels.MatrixTerm
 
 The fixed-effects `MatrixTerm` of `m.formula` (the leading `m.formula.rhs[1]`) — reattached
-unchanged by [`render`](@ref cAIC.render) (the fixed part is held constant across `stepcaic`
-candidates, CONTEXT.md *Search*). Shape-asserted to be a `MatrixTerm`.
+unchanged by [`render`](@ref ConditionalAIC.render) (the fixed part is held constant across `stepcaic`
+candidates). Shape-asserted to be a `MatrixTerm`.
 """
 function fixedterm(m::MixedModel)
     fe = m.formula.rhs[1]

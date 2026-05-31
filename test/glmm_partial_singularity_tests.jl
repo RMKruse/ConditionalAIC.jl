@@ -21,13 +21,13 @@
     # objective agrees to 1e-6 (the minimized quantity — proof the reconstruction defines the
     # identical optimization problem), and the parameters θ/β agree to 1e-5 (GLMM Laplace
     # optimizer resolution on a flat objective; see DECISIONS.md 2026-05-29).
-    using cAIC
-    using cAIC: MMInternals
+    using ConditionalAIC
+    using ConditionalAIC: MMInternals
     using MixedModels
     using Random: Xoshiro
 
     # seed-35 design (the Level-2 fixture design): 24 groups × 14 obs, random intercept+slope,
-    # the slope variance lands exactly on the boundary in both cAIC.jl and cAIC4.
+    # the slope variance lands exactly on the boundary in both ConditionalAIC.jl and cAIC4.
     rng = Xoshiro(35)
     ng, npg = 24, 14
     g = repeat(1:ng, inner=npg)
@@ -72,8 +72,8 @@ end
     # `nothing` — the signal that the caller (`caic`) must route to the rank(X) full-singularity
     # fallback rather than refit a degenerate reduced model. (Mirrors reduceboundary(::LMM)
     # returning nothing, and cAIC4's deleteZeroComponents dropping to a plain glm.)
-    using cAIC
-    using cAIC: MMInternals
+    using ConditionalAIC
+    using ConditionalAIC: MMInternals
     using MixedModels
 
     # Alternating [2,4] within each group → all group means equal → zero between-group variance
@@ -96,7 +96,7 @@ end
     # refit the reduced `(1 | g)` model, and score THAT — not the degenerate singular fit
     # (whose Efron df is nonsensical). The result carries the reduced model (`refit == true`,
     # `reducedmodel` a non-singular GLMM with one reterm), and the cAIC identity holds.
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     using Random: Xoshiro
 
@@ -148,7 +148,7 @@ end
     # near-identical θ̂ across ecosystems. A machinery error shifts caic by ≥ O(0.1).
     using HDF5
     using MixedModels
-    using cAIC: caic
+    using ConditionalAIC: caic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3   # derived Level-2 tolerance; see DECISIONS.md
@@ -191,8 +191,8 @@ end
     # concrete result type as the ordinary GLMM path. A reduced refit is a
     # `GeneralizedLinearMixedModel{T,D}` (same concrete type — the family `D` is preserved by
     # `reduceboundary`), so `caic` stays type-stable on a partially-singular fit.
-    using cAIC
-    using cAIC: CAICResult
+    using ConditionalAIC
+    using ConditionalAIC: CAICResult
     using MixedModels
     using Random: Xoshiro
 
