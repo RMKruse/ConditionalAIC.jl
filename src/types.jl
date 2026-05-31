@@ -166,6 +166,10 @@ candidates (port of `cAIC4`'s `modelAvg`). Returned by [`modelavg`](@ref).
 
 The result is **not** itself a fitted model — it is a pair of name-keyed averaged-coefficient
 vectors plus the weight provenance.
+
+Displaying a `ModelAvgResult` (`show`/REPL auto-display) prints the full averaging report —
+the candidate models, a per-candidate cAIC + weight table, and the model-averaged fixed and
+random effects — the port of `cAIC4`'s `summaryMA` (there is no standalone summary function).
 """
 struct ModelAvgResult{T<:AbstractFloat}
     fixeff::NamedEffects{String,T}
@@ -177,6 +181,11 @@ struct ModelAvgResult{T<:AbstractFloat}
     weightresult::Union{Nothing,WeightResult{T}}
 end
 
+# The full model-averaging report (port of `cAIC4`'s `summaryMA`, folded into the result's
+# REPL display — there is no standalone `summaryma` function; PARITY.md M4.5, DECISIONS
+# 2026-05-31). Sections: a header, the candidate models in input order, a per-candidate
+# cAIC + weight table, the model-averaged fixed effects, and the model-averaged random
+# effects. `formula` is the public StatsAPI accessor imported at the module top.
 function Base.show(io::IO, ::MIME"text/plain", r::ModelAvgResult)
     n = length(r.models)
     noun = n == 1 ? "candidate" : "candidates"
@@ -188,7 +197,17 @@ function Base.show(io::IO, ::MIME"text/plain", r::ModelAvgResult)
         string(r.weighttype)
     end
     println(io, "Model-averaged mixed model (modelavg): $n $noun, $scheme weights")
-    println(io, " Cand        cAIC       weight")
+
+    # Candidate models in input order. The formulas stand in for `summaryMA`'s `z$call`,
+    # which `ModelAvgResult` does not retain (DECISIONS 2026-05-31).
+    println(io, "Candidate models:")
+    for (i, m) in enumerate(r.models)
+        println(io, "  ", lpad(i, 3), ": ", string(formula(m)))
+    end
+
+    # Per-candidate cAIC + weight table. The cAIC column extends `summaryMA`'s weights-only
+    # listing; weights are `round(·; digits=6)` to match `summaryMA`.
+    println(io, " Cand          cAIC       weight")
     for i in 1:n
         println(
             io,
@@ -200,11 +219,19 @@ function Base.show(io::IO, ::MIME"text/plain", r::ModelAvgResult)
             lpad(round(r.weights[i]; digits=6), 10),
         )
     end
-    println(io, " Averaged fixed effects:")
+
+    println(io, "Model Averaged Fixed Effects:")
     for (k, v) in zip(r.fixeff.keys, r.fixeff.values)
         println(io, "  ", rpad(k, 16), round(v; digits=6))
     end
-    print(io, " (", length(r.raneff), " averaged random-effect coefficients)")
+
+    # Heading corrected from `summaryMA`'s copy-pasted "...Fixed Effects" label (an upstream
+    # bug, not transcribed; ADR-0007 decision 3). Keyed on (grouping, level, term).
+    println(io, "Model Averaged Random Effects:")
+    for (k, v) in zip(r.raneff.keys, r.raneff.values)
+        g, lev, term = k
+        println(io, "  ", rpad("$g[$lev] $term", 28), round(v; digits=6))
+    end
     return nothing
 end
 
