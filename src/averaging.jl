@@ -98,12 +98,7 @@ function modelavg(
         w = _bucklandweights(caics)
         wr = nothing
     else  # :zhang
-        rho = T[r.dof for r in caic_results]
-        i_max = argmax(rho)
-        sigma_sq = MMInternals.sigmahat(ms[i_max])^2
-        mu = hcat(MMInternals.conditionalmean.(ms)...)
-        y_vec = collect(response(ms[1]))
-        wr = _getweights_raw(y_vec, mu, rho, sigma_sq)
+        wr = _zhangweightresult(ms, T[r.dof for r in caic_results])
         w = wr.weights
     end
     fixeff = _avgfixeff(ms, w)
@@ -262,13 +257,19 @@ function getweights(res::ModelAvgResult{T}) where {T}
     # Slow path (e.g. a :smoothed result): re-score with caic to get full-precision ρ
     # (docs/math/0009 §6.1: not rounded), then run the optimizer.
     ms = res.models
-    caic_results = [caic(m) for m in ms]
-    rho = T[r.dof for r in caic_results]
-    i_max = argmax(rho)
-    sigma_sq = MMInternals.sigmahat(ms[i_max])^2
-    mu = hcat(MMInternals.conditionalmean.(ms)...)
-    y_vec = collect(response(ms[1]))
-    return _getweights_raw(y_vec, mu, rho, sigma_sq)
+    rho = T[caic(m).dof for m in ms]
+    return _zhangweightresult(ms, rho)
+end
+
+# Shared Zhang-weight assembly for both `modelavg`'s :zhang branch and `getweights`'s slow
+# path. σ̂² is taken from the max-df candidate (docs/math/0009 §6.1); the candidate
+# conditional means are stacked column-wise and the optimizer is run on the common response.
+# `stack` (not `hcat(…...)`) keeps this type-stable whether `ms` is a tuple (modelavg) or a
+# runtime-length Vector (getweights), and yields the same n×M μ column-for-column.
+function _zhangweightresult(ms, rho::Vector{T}) where {T}
+    sigma_sq = MMInternals.sigmahat(ms[argmax(rho)])^2
+    mu = stack(MMInternals.conditionalmean.(ms))
+    return _getweights_raw(collect(response(ms[1])), mu, rho, sigma_sq)
 end
 
 # Pure optimizer — the getWeights body with model-fitting bypassed (Level-1 testable).
@@ -344,6 +345,24 @@ function _getweights_raw(
         end
     end
     duration = (time_ns() - t0) / 1e9
+
+    # Renormalize onto the unit simplex (DECISIONS.md 2026-05-31, deliberate divergence from
+    # cAIC4). The transcribed `solnp` SQP enforces Σwᵢ = 1 only to its convergence tolerance
+    # (the outer break gates on |Σp − 1| ≤ tol = 1e-8, larger if `maxit` is hit without
+    # convergence), and — like `cAIC4`'s `getWeights` — returns that raw iterate. Dividing by
+    # the sum makes the public weights sum to 1 to machine precision, so the model-averaged
+    # effects are an exact convex combination. The objective is re-evaluated at the projected
+    # weights so `WeightResult.objective == find_weights(weights)` stays exactly consistent.
+    s = sum(p)
+    s > zero(T) || throw(
+        DomainError(
+            s,
+            "getweights: optimized weights sum to $s (≤ 0); cannot project onto the unit " *
+            "simplex. The weight optimization did not converge to a feasible point.",
+        ),
+    )
+    p ./= s
+    j = find_weights(p)
     return WeightResult{T}(p, j, duration)
 end
 
@@ -555,22 +574,20 @@ function _weightoptim(
                 return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
             end
 
-            # R: cz <- try(solve(cz), silent=TRUE)
-            # ADR-0007 decision 2: literal inv of the Cholesky factor — the single
-            # documented exception to §9/§12. Preserves 1:1 source correspondence with
-            # weightOptim.R:154. Do NOT "fix" this to a triangular solve.
-            cz = try
-                inv(cz_U)
+            # R: cz <- try(solve(cz), silent=TRUE);  yg <- t(cz) %*% g
+            # §9-compliant transcription: the inverse Cholesky factor cz = inv(cz_U) is
+            # never materialised. Every downstream use is a triangular solve against the
+            # factor cz_U — provably equivalent (cz' * v == cz_U' \ v, cz * v == cz_U \ v)
+            # and matching cAIC4 to the same roundoff. Supersedes ADR-0007 decision (2);
+            # see DECISIONS 2026-05-31.
+            yg_kkt, A_kkt = try
+                (cz_U' \ g, cz_U' \ a')          # R: yg <- t(cz)%*%g ;  t(cz)%*%t(a)
             catch
-                @warn "getweights: Cholesky factor inversion failed (ill-conditioned). Weights may be non-unique."
+                @warn "getweights: triangular solve of the Cholesky factor failed (ill-conditioned). Weights may be non-unique."
                 p_ret = p .* p_sc
                 hess_ret = scaler[1] .* hess ./ (p_sc * p_sc')
                 return (p=p_ret, y=zero(T), hess=hess_ret, lambda=lambda)
             end
-
-            # R: yg <- t(cz) %*% g;  y <- try(qr.solve(t(cz) %*% t(a), yg))
-            yg_kkt = cz' * g                     # R: yg <- t(cz) %*% g
-            A_kkt = cz' * a'                    # M×1 matrix
             y_kkt = try
                 A_kkt \ yg_kkt
             catch
@@ -582,7 +599,7 @@ function _weightoptim(
             y_val = only(y_kkt)
 
             # R: u <- -cz %*% (yg - (t(cz) %*% t(a)) %*% y)
-            u_step = -cz * (yg_kkt .- A_kkt .* y_val)
+            u_step = -(cz_U \ (yg_kkt .- A_kkt .* y_val))   # cz * v == cz_U \ v
             p_trial .= u_step[1:nw] .+ p
             go_lm = minimum(vcat(p_trial[1:mm] - ab[:, 1], ab[:, 2] - p_trial[1:mm]))
             lambda *= 3                         # R: lambda <- 3*lambda

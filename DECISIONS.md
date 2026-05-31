@@ -6,6 +6,80 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-05-31 — `getweights` `inv` carve-out withdrawn: `weightOptim.R:154` transcribed as a §9-compliant triangular solve (supersedes ADR-0007 decision (2))
+
+**Status:** accepted. Reverses ADR-0007 decision (2), which had kept a literal `inv(cz_U)` of the
+Cholesky factor at the `solnp` inner step as a single documented carve-out from CLAUDE §9/§12.
+
+**What changed.** `src/averaging.jl`'s `getweights` no longer materialises the inverse Cholesky
+factor `cz = inv(cz_U)`. Each use of the inverse is rewritten as the equivalent triangular solve
+against the factor `cz_U = cholesky(hess + λ·D²).U`:
+
+```
+cz' * v  ==  cz_U' \ v        cz * v  ==  cz_U \ v
+```
+
+so `yg_kkt`, `A_kkt`, and the search step `u_step` are computed by triangular solves. The two
+former `try`-fallbacks (the `inv` and the surrounding `chol`) collapse to one; the warn-on-failure
+behaviour (ADR-0007 decision (4)) is preserved.
+
+**Why this is not a numerical-result divergence.** The substitution is algebraically exact —
+`inv(R)·v` and `R \ v` differ only by floating-point roundoff, and ADR-0007 decision (2) already
+recorded that the triangular solve "matches `cAIC4` to *the same* roundoff … gives up nothing
+measurable." Both the Level-1 optimizer fixture (`rtol = 1e-6, atol = 1e-10`) and the Level-2
+end-to-end anchor (weight `atol = 1e-2`, objective `rtol = 1e-4`) pass unchanged.
+
+**Why reverse the carve-out.** ADR-0007 kept the `inv` only to preserve a 1:1 line correspondence
+with `weightOptim.R:154`; it conceded the §9-compliant solve was equivalent. Removing the carve-out
+restores the §9/§12 ban on `inv` with **no exceptions** anywhere in the codebase. Source
+auditability is retained via an in-code comment at the site giving the `cz' * v == cz_U' \ v` /
+`cz * v == cz_U \ v` equivalence, so a maintainer can still map the step back to the R source.
+
+---
+
+## 2026-05-31 — Zhang-optimal weights (`getweights`/`_getweights_raw`): renormalize onto the unit simplex; `cAIC4` returns the raw `solnp` iterate
+
+**Status:** accepted (design). Applies to `_getweights_raw` (port of `cAIC4`'s `getWeights`),
+hence to both the `modelavg(...; weights=:zhang)` weight vector and `getweights`'s `WeightResult`.
+
+**What diverges.** The transcribed `solnp` SQP carries the simplex constraint `Σwᵢ = 1` as an
+**equality constraint inside the augmented-Lagrangian objective**, not as an algebraic identity.
+The outer loop drives `eqv = Σp − 1` toward zero and stops when `sqrt(tt² + eqv²) ≤ tol`
+(`tol = 1e-8`), so at convergence the raw iterate satisfies only `|Σp − 1| ≤ tol ≈ 1e-8` — and
+larger if the loop hits its `maxit = 400` cap without converging, or returns early through one of
+the ill-conditioned `@warn` fallbacks (entry 2026-05-31, *Ill-conditioned weight fallback*).
+`cAIC4`'s `getWeights`/`.weightOptim` returns this raw iterate **unnormalized**. `cAIC.jl`
+instead projects the final iterate onto the unit simplex (`p ./= sum(p)`) before returning, so the
+public weights sum to 1 to machine precision and the model-averaged effects `Σ wᵢ·θ̂ᵢ`
+(`_avgfixeff`/`_avgraneff`) are an **exact** convex combination rather than one carrying a
+≤ `1e-8` mass defect. The Buckland path (`:smoothed`) is unaffected — its `softmax` already sums
+to 1 to ~machine epsilon (entry 2026-05-31, *Model-averaging Buckland weights*).
+
+**Why this is not a numerical-result divergence.** The projection scales the converged weight
+vector by `1/Σp = 1/(1 ± 1e-8)`, an `O(1e-8)` relative shift — three to four orders of magnitude
+below the Level-2 weight band `atol = 1e-2` (entry 2026-05-31, *Level-2 end-to-end anchor*) and
+the Level-1 band `rtol = 1e-6, atol = 1e-10` (entry 2026-05-31, *Zhang-optimal weight optimizer*).
+Both fixtures still pass unchanged: the projection moves the weights and the objective by less than
+the fit-discrepancy and FP-non-associativity residuals those tolerances already absorb. The
+returned `objective` is **re-evaluated at the projected weights** (`j = find_weights(p)` after the
+divide) so `WeightResult.objective == find_weights(WeightResult.weights)` remains exactly
+consistent rather than reporting `J` at the pre-projection iterate.
+
+**Direction of the divergence.** This is the rare case where `cAIC.jl` is *more* constrained than
+`cAIC4`, not a relaxation: the API gains a hard "weights lie on the simplex" guarantee that
+`cAIC4` only approximates. CLAUDE §1 (mathematical correctness — averaging weights *are* a convex
+combination by definition) motivates it; it is recorded here because it is a deliberate,
+observable departure from the reference output. The `M = 1` short-circuit (`ŵ = (1)`) and the
+`:smoothed` path already satisfy the guarantee and are unchanged.
+
+**Fail-loud guard.** If the optimizer ever returns an iterate with `Σp ≤ 0` (gross
+non-convergence — every weight collapsed to ~0), the projection raises `DomainError` rather than
+dividing by a non-positive sum and emitting a silently-wrong weight vector (CLAUDE §4). On every
+converged or feasibility-restored iterate `Σp ≈ 1 > 0`, so this never fires in practice; it guards
+the pathological optimizer-failure path only.
+
+---
+
 ## 2026-05-31 — Zhang-optimal weight optimizer (`getweights`/`_weightoptim`): Level-1 tolerance `rtol = 1e-6, atol = 1e-10`; full-precision df vs `cAIC4`'s `digits=2` rounding
 
 **Status:** accepted (measured — #50, M4.5). Applies to `getweights` and the

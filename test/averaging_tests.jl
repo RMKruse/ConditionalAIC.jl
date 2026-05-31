@@ -316,7 +316,9 @@ end
     res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
 
     @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
-    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+    # Renormalized onto the unit simplex: sums to 1 to machine precision, not just the
+    # SQP convergence tolerance (DECISIONS.md 2026-05-31, simplex projection).
+    @test abs(sum(res.weights) - 1) ≤ 1e-12
     @test all(≥(-1e-10), res.weights)
     @test res.objective ≈ r_objective rtol = L1_RTOL atol = L1_ATOL
 end
@@ -343,7 +345,9 @@ end
     res = cAIC._getweights_raw(y, mu, rho, sigma_sq)
 
     @test res.weights ≈ r_weights rtol = L1_RTOL atol = L1_ATOL
-    @test sum(res.weights) ≈ 1.0 atol = 1e-8
+    # Renormalized onto the unit simplex: sums to 1 to machine precision, not just the
+    # SQP convergence tolerance (DECISIONS.md 2026-05-31, simplex projection).
+    @test abs(sum(res.weights) - 1) ≤ 1e-12
     @test all(≥(-1e-10), res.weights)
     @test res.objective ≈ r_objective rtol = L1_RTOL atol = L1_ATOL
 end
