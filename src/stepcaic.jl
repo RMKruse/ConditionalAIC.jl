@@ -659,7 +659,10 @@ end
     StepcaicOptions
 
 The resolved [`stepcaic`](@ref) options retained for provenance (`cAIC4`'s call record analogue).
-The forward / `both` options are filled in as those cycles come online.
+The forward / `both` enumeration options (`groupcandidates`, `slopecandidates`, `maxslopes`,
+`useacross`) carry the forward arc's resolved settings (M4 §5.1); they are empty/defaulted for a
+pure backward run. `keep` is not retained here — it is a [`RESpec`](@ref) floor threaded into the
+backward enumeration, not a scalar provenance field.
 """
 struct StepcaicOptions
     direction::Symbol
@@ -667,6 +670,10 @@ struct StepcaicOptions
     allownointercept::Bool
     steps::Int
     savedmodels::Int
+    groupcandidates::Vector{Symbol}
+    slopecandidates::Vector{Symbol}
+    maxslopes::Int
+    useacross::Bool
 end
 
 """
@@ -721,19 +728,54 @@ function Base.show(io::IO, ::MIME"text/plain", r::StepcaicResult)
     return nothing
 end
 
+# Shared option validation for both `stepcaic` methods: the supported directions and the
+# forward/`both` call-consistency check (`R/stepcAIC.R:347–359`) — a forward or `both` run needs
+# something to add (a slope candidate, a group candidate, or `useacross`). `fixEfCandidates` is out
+# of scope (fixed effects held constant, §0).
+function _validatestepcaic(
+    direction::Symbol,
+    savedmodels::Int,
+    slopecandidates::Vector{Symbol},
+    groupcandidates::Vector{Symbol},
+    maxslopes::Int,
+    useacross::Bool,
+)
+    direction in (:backward, :forward, :both) || throw(
+        ArgumentError(
+            "stepcaic direction must be :backward, :forward, or :both; got :$(direction)",
+        ),
+    )
+    savedmodels >= 0 ||
+        throw(ArgumentError("savedmodels must be ≥ 0 (0 keeps all); got $savedmodels"))
+    if direction in (:forward, :both)
+        maxslopes >= 1 || throw(ArgumentError("maxslopes must be ≥ 1 (got $maxslopes)"))
+        (isempty(slopecandidates) && isempty(groupcandidates) && !useacross) && throw(
+            ArgumentError(
+                "stepcaic direction = :$(direction) cannot make forward steps without candidate " *
+                "random-effect covariates: supply slopecandidates, groupcandidates, or useacross=true",
+            ),
+        )
+    end
+    return nothing
+end
+
 """
-    stepcaic(m::LinearMixedModel, data; direction=:backward, keep=nothing,
+    stepcaic(m::LinearMixedModel, data; direction=:backward, groupcandidates=Symbol[],
+             slopecandidates=Symbol[], maxslopes=2, useacross=false, keep=nothing,
              selectcorrelation=false, allownointercept=false, steps=50, savedmodels=1,
              method=:auto, hessian=:analytic, nboot=nothing, sigmapenalty=1,
              rng=Random.default_rng()) -> StepcaicResult
 
 Conditional stepwise random-effects selection guided by the conditional AIC — the greedy
-controller of `cAIC4`'s `stepcAIC`, in the **backward** direction (M4 §4.1).
+controller of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction
+(M4 §4.1–§4.2).
 
 Starting from the fitted model `m`, each step enumerates the random-effects neighbours one
-direction *smaller* ([`backwardcandidates`](@ref)), rebuilds and refits each over `data`, and
-scores it with [`caic`](@ref). The minimum-cAIC neighbour is accepted while it does not increase
-the cAIC (the `≤` rule); the search stops when no neighbour improves, the neighbourhood is
+direction *smaller* ([`backwardcandidates`](@ref), backward) or *larger* ([`forwardcandidates`](@ref),
+forward), rebuilds and refits each over `data`, and scores it with [`caic`](@ref). The minimum-cAIC
+neighbour is accepted while it does not increase the cAIC (the `≤` rule); `direction = :both` starts
+forward and alternates after each accepted or non-improving turn (the `improvementInBoth` /
+`equalToLastStep` cascade). The search stops when no neighbour improves, the neighbourhood is
 exhausted, or `steps` is reached. The selected model, its score, and the full search path are
 returned in a [`StepcaicResult`](@ref).
 
@@ -744,10 +786,13 @@ Every candidate is scored with the **same** forwarded scoring kwargs (`method`/`
 - `m`: the fitted Gaussian `LinearMixedModel` to search from.
 - `data`: the data table the candidates are refit over (required — a rebuilt formula must be
   fitted, mirroring `cAIC4`'s required `data`).
-- `direction`: `:backward` (the only supported value in this skeleton).
+- `direction`: `:backward` (default), `:forward`, or `:both`.
+- `groupcandidates`, `slopecandidates`, `maxslopes`, `useacross`: the forward enumeration inputs
+  (see [`forwardcandidates`](@ref)); ignored for a backward run. A forward/`both` run requires at
+  least one of `slopecandidates`/`groupcandidates` (or `useacross`), else `ArgumentError`.
 - `keep`: a [`RESpec`](@ref) floor forwarded to `backwardcandidates`; `nothing` for no floor.
 - `selectcorrelation`, `allownointercept`: the enumeration flags (see `backwardcandidates`).
-- `steps`: the maximum number of accepted steps (`cAIC4`'s `steps`, default `50`).
+- `steps`: the maximum number of search iterations (`cAIC4`'s `steps`, default `50`).
 - `savedmodels`: how many of the best distinct scored models to retain in `result.saved`
   (`cAIC4`'s `numberOfSavedModels`); `1` (default) keeps only the selected model, `0` keeps all.
 - `method`, `hessian`, `nboot`, `sigmapenalty`, `rng`: forwarded unchanged to every `caic` score.
@@ -757,12 +802,13 @@ Every candidate is scored with the **same** forwarded scoring kwargs (`method`/`
   resolved options.
 
 # Throws
-- `ArgumentError` for an unsupported `direction`.
+- `ArgumentError` for an unsupported `direction`, a forward/`both` run with no candidates, or
+  `savedmodels < 0`.
 
 # Example
 ```julia
-m = fit(MixedModel, @formula(reaction ~ 1 + days + (1 + days | subj)), sleepstudy; progress=false)
-res = stepcaic(m, sleepstudy)            # backward search; selects the full model here
+m = fit(MixedModel, @formula(reaction ~ 1 + days + (1 | subj)), sleepstudy; progress=false)
+res = stepcaic(m, sleepstudy; direction=:forward, slopecandidates=[:days])  # grows the random slope
 res.selected.caic
 ```
 """
@@ -770,6 +816,10 @@ function stepcaic(
     m::LinearMixedModel{T},
     data;
     direction::Symbol=:backward,
+    groupcandidates::Vector{Symbol}=Symbol[],
+    slopecandidates::Vector{Symbol}=Symbol[],
+    maxslopes::Int=2,
+    useacross::Bool=false,
     keep::Union{Nothing,RESpec}=nothing,
     selectcorrelation::Bool=false,
     allownointercept::Bool=false,
@@ -781,13 +831,9 @@ function stepcaic(
     sigmapenalty::Integer=1,
     rng::AbstractRNG=default_rng(),
 ) where {T}
-    direction === :backward || throw(
-        ArgumentError(
-            "stepcaic currently supports only direction = :backward; got :$(direction)"
-        ),
+    _validatestepcaic(
+        direction, savedmodels, slopecandidates, groupcandidates, maxslopes, useacross
     )
-    savedmodels >= 0 ||
-        throw(ArgumentError("savedmodels must be ≥ 0 (0 keeps all); got $savedmodels"))
 
     # Quarantined formula parts + REML flag; candidates are refit with the input's objective.
     fixed = MMInternals.fixedterm(m)
@@ -798,36 +844,67 @@ function stepcaic(
     )::CAICResult{T,LinearMixedModel{T}}
     refitcand(c) = fit(MixedModel, render(c, fixed, lhs), data; REML=reml, progress=false)
     terminalfit() = (tm=lm(_StatsModels.FormulaTerm(lhs, fixed), data); (tm, caic(tm)))
+    gencands(spec, dir) = if dir === :forward
+        forwardcandidates(
+        spec; slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation
+    )
+    else
+        backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+    end
 
     options = StepcaicOptions(
-        direction, selectcorrelation, allownointercept, steps, savedmodels
+        direction,
+        selectcorrelation,
+        allownointercept,
+        steps,
+        savedmodels,
+        groupcandidates,
+        slopecandidates,
+        maxslopes,
+        useacross,
     )
-    return _runstepcaic(T, m, score, refitcand, terminalfit, options; keep)
+    return _runstepcaic(T, m, score, refitcand, terminalfit, gencands, options; keep)
 end
 
-# The model-family-agnostic backward driver shared by the `LinearMixedModel` and
-# `GeneralizedLinearMixedModel` `stepcaic` methods. The greedy walk, the `mergeChanges`
-# drop-original, the `lm`/`glm` terminal arc, and the `savedmodels` k-best accumulation are
-# identical across families; only three pieces differ and are injected as closures:
+# Flip the working direction (`R/stepcAIC.R`'s `ifelse(direction=="forward","backward","forward")`).
+_flip(d::Symbol) = d === :forward ? :backward : :forward
+
+# The model-family-agnostic driver shared by the `LinearMixedModel` and
+# `GeneralizedLinearMixedModel` `stepcaic` methods, covering all three directions (`:backward`,
+# `:forward`, `:both`) — the faithful port of `cAIC4`'s `stepCAIC` decision cascade
+# (`R/stepcAIC.R:565–657`) plus the forward-terminal arc (`:435`) and the `lm`/`glm` backward
+# terminal (§0.1). The greedy walk, the `mergeChanges` drop-original, the terminal arcs, and the
+# `savedmodels` k-best accumulation are identical across families; four pieces differ and are
+# injected as closures:
 #   • `score`       — `model -> CAICResult{T,M}` with the family's forwarded scoring kwargs;
 #   • `refitcand`   — `spec -> M`, rebuild+refit a candidate over `data` (REML for LMM, the GLM
 #                     distribution family for GLMM);
 #   • `terminalfit` — `() -> (termmodel, termresult)`, fit+score the no-random-effects `lm`/`glm`
-#                     terminal (called only at the cnms single-direction node with no keep floor).
-# The return type varies across the terminal branch (a `MixedModel` above it, the `GLM.jl`
-# terminal at it); the driver is not a hot kernel, so this is accepted (docs/math/0008 §5.1).
+#                     terminal (called only at the cnms single-direction node with no keep floor);
+#   • `gencands`    — `(spec, dir) -> Vector{RESpec}`, the per-direction candidate enumeration
+#                     (`forwardcandidates` with the forward kwargs when `dir === :forward`,
+#                     `backwardcandidates` with the backward kwargs otherwise).
+# `direction = :both` latches `dirWasBoth = true` and starts the working direction **forward**
+# (`:389`), flipping it after each accepted or non-improving turn; `improvementinboth` and
+# `equaltolaststep` are the cascade's alternation/plateau guards. The return type varies across the
+# terminal branch (a `MixedModel` above it, the `GLM.jl` terminal at it); the driver is not a hot
+# kernel, so this is accepted (docs/math/0008 §5.1).
 function _runstepcaic(
     ::Type{T},
     m::M,
     score::F,
     refitcand::G,
     terminalfit::H,
+    gencands::C,
     options::StepcaicOptions;
     keep::Union{Nothing,RESpec},
-) where {T,M<:MixedModel,F,G,H}
-    selectcorrelation = options.selectcorrelation
-    allownointercept = options.allownointercept
+) where {T,M<:MixedModel,F,G,H,C}
     savedmodels = options.savedmodels
+    dirwasboth = options.direction === :both
+    # Working direction: `both`/`forward` start forward (`:389`); `backward` is the §4.1 skeleton.
+    workdir = options.direction in (:both, :forward) ? :forward : :backward
+    improvementinboth = true
+    equaltolaststep = false
 
     cur_spec = extract(m)
     cur_model = m
@@ -857,16 +934,40 @@ function _runstepcaic(
         CAICResult{T}[savedpool[i] for i in order[1:min(nsave, length(order))]]
     end
 
+    result(res, model, selkey) =
+        StepcaicResult(res, model, path, finalsaved(selkey, res), options)
+
     stepsleft = options.steps
     while stepsleft > 0
-        cands = backwardcandidates(cur_spec; keep, selectcorrelation, allownointercept)
-        # `backwardStep`'s NA/empty return. With NO keep floor at the cnms single-direction terminal
-        # it is the `lm`/`glm` terminal descent (§0.1): the no-random-effects fit is scored and
-        # subjected to the same `≤` rule — accept-and-stop if it improves, else keep the incumbent.
-        # Under a keep floor (or away from the single-direction terminal) there is no terminal to
-        # descend to — stop and keep the incumbent (the exhausted neighbourhood).
-        if isempty(cands)
-            (keep === nothing && _totaldirections(cur_spec) == 1) || break
+        cands = gencands(cur_spec, workdir)
+
+        # Forward-terminal arc (`:435`): forward enumeration exhausted → return the incumbent as
+        # best, *before* scoring. Forward never descends to the `lm`/`glm` terminal (it only grows).
+        # Fires regardless of `dirwasboth`, so a `both` run whose forward turn yields nothing stops.
+        if workdir === :forward && isempty(cands)
+            return result(cur_result, cur_model, _savedkey(cur_spec))
+        end
+
+        # Backward enumeration exhausted: at the cnms single-direction node with NO keep floor the
+        # sole neighbour is the `lm`/`glm` terminal (§0.1) — score it as the candidate set (`allNA`,
+        # a finite cAIC). Otherwise the neighbourhood is empty (`minCAIC == Inf`): a `both` run flips
+        # direction (`:565–571` branch A), a non-`both` run stops keeping the incumbent.
+        terminaldescent = false
+        if workdir === :backward && isempty(cands)
+            if keep === nothing && _totaldirections(cur_spec) == 1
+                terminaldescent = true
+            elseif dirwasboth
+                workdir = _flip(workdir)
+                improvementinboth = false
+                continue
+            else
+                break
+            end
+        end
+
+        stepsleft -= 1   # `R/stepcAIC.R:468` — one decrement per scoring iteration
+
+        if terminaldescent
             termmodel, termresult = terminalfit()
             termcaic = termresult.caic
             remember!(_TERMINALKEY, termresult)
@@ -874,7 +975,7 @@ function _runstepcaic(
             push!(
                 path,
                 StepRecord{T}(
-                    :backward,
+                    workdir,
                     cAICofMod,
                     ScoredCandidate{T}[ScoredCandidate{T}(
                         nothing, termcaic, termresult.dof
@@ -883,20 +984,32 @@ function _runstepcaic(
                     accepted,
                 ),
             )
-            accepted && return StepcaicResult(
-                termresult,
-                termmodel,
-                path,
-                finalsaved(_TERMINALKEY, termresult),
-                options,
-            )
-            break
+            # `allNA` + `≤`: accept-and-stop (branch B's `all(is.na(newSetup))` arc). Otherwise the
+            # terminal does not improve: a `both` run with a prior successful turn flips once more
+            # (branch F), else stop keeping the incumbent (branch G).
+            accepted && return result(termresult, termmodel, _TERMINALKEY)
+            if dirwasboth && improvementinboth
+                workdir = _flip(workdir)
+                improvementinboth = false
+                continue
+            else
+                break
+            end
         end
 
         # `mergeChanges` drop-original: discard every candidate equal to the current model before
-        # scoring (the keep re-add / keep floor can reconstitute the unchanged incumbent).
+        # scoring (the keep re-add / a no-op enlargement can reconstitute the unchanged incumbent).
         cands = RESpec[c for c in cands if c != cur_spec]
-        isempty(cands) && break
+        if isempty(cands)
+            # `minCAIC == Inf` (branch A): flip in `both`, else stop keeping the incumbent.
+            if dirwasboth
+                workdir = _flip(workdir)
+                improvementinboth = false
+                continue
+            else
+                break
+            end
+        end
 
         models = Vector{M}(undef, length(cands))
         results = Vector{CAICResult{T,M}}(undef, length(cands))
@@ -912,11 +1025,18 @@ function _runstepcaic(
 
         bestidx = argmin(caics)
         minCAIC = caics[bestidx]
-        accepted = minCAIC <= cAICofMod
+        improves = minCAIC <= cAICofMod
+        single = stepsleft == 0 || length(cands) == 1
+
+        # `accepted` for the path record: the best candidate becomes (or would become) the incumbent
+        # this step (branches B/C/D) vs. rejected (branches E/F/G). The mixed-candidate set never
+        # carries the `lm`/`glm` terminal (`allNA`/`bestIsGLM` are false here), so branch B is unreachable
+        # on this path — its terminal/keep-minimal arcs are the `terminaldescent`/single-candidate stops.
+        accepted = improves && (!equaltolaststep || improvementinboth)
         push!(
             path,
             StepRecord{T}(
-                :backward,
+                workdir,
                 cAICofMod,
                 ScoredCandidate{T}[
                     ScoredCandidate{T}(cands[i], caics[i], results[i].dof) for
@@ -927,36 +1047,58 @@ function _runstepcaic(
             ),
         )
 
-        if accepted
+        if improves && !equaltolaststep
+            # Branch C: accept the improving (or first-tie) move. A tie latches `equaltolaststep`.
+            minCAIC == cAICofMod && (equaltolaststep = true)
+            single &&
+                return result(results[bestidx], models[bestidx], _savedkey(cands[bestidx]))
             cur_spec = cands[bestidx]
             cur_model = models[bestidx]
             cur_result = results[bestidx]
             cAICofMod = minCAIC
-            stepsleft -= 1
-            length(cands) == 1 && break
+            improvementinboth = true
+            dirwasboth && (workdir = _flip(workdir))
+        elseif improves && equaltolaststep && improvementinboth
+            # Branch D: the plateau's second accepted move (consumes `improvementinboth`).
+            cur_spec = cands[bestidx]
+            cur_model = models[bestidx]
+            cur_result = results[bestidx]
+            cAICofMod = minCAIC
+            improvementinboth = false
+            dirwasboth && (workdir = _flip(workdir))
+        elseif !improves && single && !dirwasboth
+            # Branch E: no improvement and out of moves (non-`both`) — stop, keep incumbent.
+            break
+        elseif !improves && dirwasboth && improvementinboth
+            # Branch F: a `both` non-improving turn after a prior success — flip and try once more.
+            workdir = _flip(workdir)
+            improvementinboth = false
         else
+            # Branch G: stop, keep the incumbent.
             break
         end
     end
 
-    return StepcaicResult(
-        cur_result, cur_model, path, finalsaved(_savedkey(cur_spec), cur_result), options
-    )
+    return result(cur_result, cur_model, _savedkey(cur_spec))
 end
 
 """
-    stepcaic(m::GeneralizedLinearMixedModel, data; direction=:backward, keep=nothing,
+    stepcaic(m::GeneralizedLinearMixedModel, data; direction=:backward, groupcandidates=Symbol[],
+             slopecandidates=Symbol[], maxslopes=2, useacross=false, keep=nothing,
              selectcorrelation=false, allownointercept=false, steps=50, savedmodels=1,
              method=:auto, nboot=nothing, rng=Random.default_rng()) -> StepcaicResult
 
 Conditional stepwise random-effects selection for a non-Gaussian `GeneralizedLinearMixedModel` —
-the GLMM branch of `cAIC4`'s `stepcAIC`, in the **backward** direction (M4 §4.1).
+the GLMM branch of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction
+(M4 §4.1–§4.2).
 
 Identical in structure to the [`LinearMixedModel`](@ref stepcaic) method: each step enumerates the
-random-effects neighbours one direction *smaller* ([`backwardcandidates`](@ref)), rebuilds and
-refits each over `data` with the model's GLM **distribution family**, and scores it with
-[`caic`](@ref)'s GLMM path (the M3 bias correction). The minimum-cAIC neighbour is accepted while
-it does not increase the cAIC (the `≤` rule); the search bottoms out at the `glm` terminal.
+random-effects neighbours one direction *smaller* ([`backwardcandidates`](@ref)) or *larger*
+([`forwardcandidates`](@ref)), rebuilds and refits each over `data` with the model's GLM
+**distribution family**, and scores it with [`caic`](@ref)'s GLMM path (the M3 bias correction).
+The minimum-cAIC neighbour is accepted while it does not increase the cAIC (the `≤` rule);
+`direction = :both` starts forward and alternates; a backward search bottoms out at the `glm`
+terminal.
 
 The scoring kwargs are the GLMM `caic` set — `method`/`nboot`/`rng` — and are forwarded
 **unchanged** to every candidate score (the consistent-scoring requirement). The Gaussian-only
@@ -965,7 +1107,10 @@ The scoring kwargs are the GLMM `caic` set — `method`/`nboot`/`rng` — and ar
 # Arguments
 - `m`: the fitted `GeneralizedLinearMixedModel` to search from.
 - `data`: the data table candidates are refit over (required).
-- `direction`: `:backward` (the only supported value in this skeleton).
+- `direction`: `:backward` (default), `:forward`, or `:both`.
+- `groupcandidates`, `slopecandidates`, `maxslopes`, `useacross`: the forward enumeration inputs
+  (see [`forwardcandidates`](@ref)); ignored for a backward run. A forward/`both` run requires at
+  least one of `slopecandidates`/`groupcandidates` (or `useacross`), else `ArgumentError`.
 - `keep`, `selectcorrelation`, `allownointercept`, `steps`, `savedmodels`: as in the
   `LinearMixedModel` method.
 - `method`, `nboot`, `rng`: forwarded unchanged to every GLMM `caic` score.
@@ -975,12 +1120,13 @@ The scoring kwargs are the GLMM `caic` set — `method`/`nboot`/`rng` — and ar
   resolved options.
 
 # Throws
-- `ArgumentError` for an unsupported `direction` or a negative `savedmodels`.
+- `ArgumentError` for an unsupported `direction`, a forward/`both` run with no candidates, or a
+  negative `savedmodels`.
 
 # Example
 ```julia
-m = fit(MixedModel, @formula(y ~ 1 + x + (1 | sub) + (1 | it)), data, Poisson(); progress=false)
-res = stepcaic(m, data)                  # backward GLMM search
+m = fit(MixedModel, @formula(y ~ 1 + x + (1 | sub)), data, Poisson(); progress=false)
+res = stepcaic(m, data; direction=:forward, groupcandidates=[:it])   # grows the crossed intercept
 res.selected.caic
 ```
 """
@@ -988,6 +1134,10 @@ function stepcaic(
     m::GeneralizedLinearMixedModel{T,D},
     data;
     direction::Symbol=:backward,
+    groupcandidates::Vector{Symbol}=Symbol[],
+    slopecandidates::Vector{Symbol}=Symbol[],
+    maxslopes::Int=2,
+    useacross::Bool=false,
     keep::Union{Nothing,RESpec}=nothing,
     selectcorrelation::Bool=false,
     allownointercept::Bool=false,
@@ -997,13 +1147,9 @@ function stepcaic(
     nboot::Union{Int,Nothing}=nothing,
     rng::AbstractRNG=default_rng(),
 ) where {T,D}
-    direction === :backward || throw(
-        ArgumentError(
-            "stepcaic currently supports only direction = :backward; got :$(direction)"
-        ),
+    _validatestepcaic(
+        direction, savedmodels, slopecandidates, groupcandidates, maxslopes, useacross
     )
-    savedmodels >= 0 ||
-        throw(ArgumentError("savedmodels must be ≥ 0 (0 keeps all); got $savedmodels"))
 
     # Quarantined formula parts + the GLM distribution family; candidates refit with that family.
     fixed = MMInternals.fixedterm(m)
@@ -1014,9 +1160,24 @@ function stepcaic(
     refitcand(c) = fit(MixedModel, render(c, fixed, lhs), data, dist; progress=false)
     terminalfit() =
         (tm=GLM.glm(_StatsModels.FormulaTerm(lhs, fixed), data, dist); (tm, caic(tm)))
+    gencands(spec, dir) = if dir === :forward
+        forwardcandidates(
+        spec; slopecandidates, groupcandidates, maxslopes, useacross, selectcorrelation
+    )
+    else
+        backwardcandidates(spec; keep, selectcorrelation, allownointercept)
+    end
 
     options = StepcaicOptions(
-        direction, selectcorrelation, allownointercept, steps, savedmodels
+        direction,
+        selectcorrelation,
+        allownointercept,
+        steps,
+        savedmodels,
+        groupcandidates,
+        slopecandidates,
+        maxslopes,
+        useacross,
     )
-    return _runstepcaic(T, m, score, refitcand, terminalfit, options; keep)
+    return _runstepcaic(T, m, score, refitcand, terminalfit, gencands, options; keep)
 end

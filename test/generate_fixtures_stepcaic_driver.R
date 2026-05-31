@@ -78,7 +78,33 @@ scenarios <- list(
   # diverges from the project's lm/MLE terminal — DECISIONS 2026-05-31).
   list(tag = "pastes_saved2",
        form = strength ~ 1 + (1 | batch) + (1 | cask), data = Pastes,
-       direction = "backward", keep = "", nsaved = 2)
+       direction = "backward", keep = "", nsaved = 2),
+  # ── forward / both arcs (#41) ──────────────────────────────────────────────
+  # Forward grows the slope: from (1|Subject), slopeCandidate Days adds the random Days slope
+  # (the grown model improves), selecting (1 + Days | Subject). bestCAIC 1711.799.
+  list(tag = "sleep_fwd_days",
+       form = Reaction ~ 1 + Days + (1 | Subject), data = sleepstudy,
+       direction = "forward", slope = "Days", keep = "", nsaved = 1),
+  # `both` starts forward (R/stepcAIC.R:389) and reaches the same grown model in one accepted step.
+  list(tag = "sleep_both_days",
+       form = Reaction ~ 1 + Days + (1 | Subject), data = sleepstudy,
+       direction = "both", slope = "Days", keep = "", nsaved = 1),
+  # Forward-terminal arc (:435): from the full (1 + Days | Subject), slopeCandidate Days has no
+  # admissible one-larger enlargement → forwardStep returns NULL → return the input as best. Forward
+  # never descends to lm. bestCAIC = the input's own cAIC, 1711.799.
+  list(tag = "sleep_fwd_full",
+       form = Reaction ~ 1 + Days + (1 + Days | Subject), data = sleepstudy,
+       direction = "forward", slope = "Days", keep = "", nsaved = 1),
+  # Forward rejects: from (1|batch), groupCandidate cask adds (1|cask), but the crossed model does
+  # NOT improve → keep (1|batch). bestCAIC 301.483 (the same incumbent the backward Pastes runs hit).
+  list(tag = "pastes_fwd_cask",
+       form = strength ~ 1 + (1 | batch), data = Pastes,
+       direction = "forward", group = "cask", keep = "", nsaved = 1),
+  # `both` from (1|batch): forward turn (add cask) does not improve → flip backward → lm terminal
+  # does not improve → stop, keeping (1|batch). Exercises the two-non-improving-turns termination.
+  list(tag = "pastes_both_cask",
+       form = strength ~ 1 + (1 | batch), data = Pastes,
+       direction = "both", group = "cask", keep = "", nsaved = 1)
 )
 
 if (file.exists(fixture)) file.remove(fixture)
@@ -98,7 +124,11 @@ for (sc in scenarios) {
   fit <- lmer(sc$form, data = dat, REML = FALSE)
   keep <- if (nzchar(sc$keep)) list(random = as.formula(sc$keep)) else NULL
   nsaved <- if (is.null(sc$nsaved)) 1 else sc$nsaved
+  # forward / both arcs supply slope-/groupCandidates ("" or absent = none, the backward default).
+  slopeCands <- if (!is.null(sc$slope) && nzchar(sc$slope)) sc$slope else NULL
+  groupCands <- if (!is.null(sc$group) && nzchar(sc$group)) sc$group else NULL
   res <- stepcAIC(fit, direction = sc$direction, data = dat, keep = keep,
+                  slopeCandidates = slopeCands, groupCandidates = groupCands,
                   numberOfSavedModels = nsaved, returnResult = TRUE, trace = FALSE)
   fm <- res$finalModel
   finalclass <- paste(class(fm), collapse = ",")
@@ -108,6 +138,8 @@ for (sc in scenarios) {
   put(paste0(sc$tag, "/bestCAIC"), as.numeric(res$bestCAIC))
   put(paste0(sc$tag, "/direction"), sc$direction)
   put(paste0(sc$tag, "/keep"), sc$keep)
+  put(paste0(sc$tag, "/slope"), if (is.null(slopeCands)) "" else slopeCands)
+  put(paste0(sc$tag, "/group"), if (is.null(groupCands)) "" else groupCands)
   put(paste0(sc$tag, "/initialformula"), paste(deparse(sc$form), collapse = " "))
   put(paste0(sc$tag, "/finalformula"), finalformula)
   put(paste0(sc$tag, "/finalclass"), finalclass)
@@ -174,6 +206,35 @@ cat(sprintf("  %-18s bestCAIC=%.6f  final[%s]: %s\n",
             gtag, gres$bestCAIC, paste(class(gfm), collapse = ","),
             paste(deparse(formula(gfm)), collapse = " ")))
 
+# ── GLMM forward scenario (#41) ───────────────────────────────────────────────
+# Same seed-404 crossed-Poisson data, but the search STARTS from a single random intercept
+# `y ~ x + (1 | sub)` and grows forward with groupCandidate `it`. cAIC4 adds the second random
+# intercept, selecting `y ~ x + (1 | it) + (1 | sub)` — the same full crossed model as above
+# (bestCAIC 448.206). Exercises the forward arc on the GLMM family-dispatch path (the candidate
+# refit uses the GLM distribution family). raw_data is stored again so the Julia test is
+# self-contained (the columns are bit-identical to glmm_poisson_keep's).
+gffit <- glmer(y ~ x + (1 | sub), data = gdat, family = poisson)
+gfres <- stepcAIC(gffit, direction = "forward", data = gdat, groupCandidates = "it",
+                  numberOfSavedModels = 1, returnResult = TRUE, trace = FALSE)
+gffm  <- gfres$finalModel
+gftag <- "glmm_fwd_it"
+h5createGroup(fixture, gftag)
+h5createGroup(fixture, file.path(gftag, "raw_data"))
+put(file.path(gftag, "raw_data", "y"),   as.numeric(g_y))
+put(file.path(gftag, "raw_data", "x"),   as.numeric(g_x))
+put(file.path(gftag, "raw_data", "sub"), as.integer(g_sub))
+put(file.path(gftag, "raw_data", "it"),  as.integer(g_it))
+put(paste0(gftag, "/bestCAIC"), as.numeric(gfres$bestCAIC))
+put(paste0(gftag, "/direction"), "forward")
+put(paste0(gftag, "/family"), "poisson")
+put(paste0(gftag, "/group"), "it")
+put(paste0(gftag, "/initialformula"), "y ~ 1 + x + (1 | sub)")
+put(paste0(gftag, "/finalformula"), paste(deparse(formula(gffm)), collapse = " "))
+put(paste0(gftag, "/finalclass"), paste(class(gffm), collapse = ","))
+cat(sprintf("  %-18s bestCAIC=%.6f  final[%s]: %s\n",
+            gftag, gfres$bestCAIC, paste(class(gffm), collapse = ","),
+            paste(deparse(formula(gffm)), collapse = " ")))
+
 h5createGroup(fixture, "meta")
 put("meta/cAIC4_version", caic4_version)
 put("meta/lme4_version", as.character(packageVersion("lme4")))
@@ -181,4 +242,4 @@ put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
 put("meta/R_version", R.version.string)
 
 cat(sprintf("Wrote %d driver scenario(s) to %s (cAIC4 %s, lme4 %s).\n",
-            length(scenarios) + 1L, fixture, caic4_version, as.character(packageVersion("lme4"))))
+            length(scenarios) + 2L, fixture, caic4_version, as.character(packageVersion("lme4"))))

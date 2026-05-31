@@ -499,8 +499,65 @@ the GLMM method neither accepts nor forwards them. Both methods forward their kw
 model's GLM distribution family (`m.resp.d`), so the GLMM terminal is the family `glm`, scored by
 the same ADR-0006 `caic(::RegressionModel)` terminal as the Gaussian `lm`.
 
-> *(to fill: the forward / `both` arcs — `improvementInBoth` flip, the `both`-start-forward and
-> per-step direction flip (:212–263), out of the backward skeleton's scope.)*
+### 4.2 The **forward** and **`both`** arcs (#41)
+
+The full controller adds the `direction ∈ {:forward, :both}` branches — the `dirWasBoth` /
+`improvementInBoth` / `equalToLastStep` alternation cascade of `R/stepcAIC.R:565–657` plus the
+forward-terminal arc (`:435`). The loop is identical in skeleton to §4.1; the differences are: the
+per-step candidate set is the **forward** enumeration ([`forwardcandidates`](@ref), §3) when the
+working direction is forward, and the decision part flips the working direction in `both` mode.
+
+**Initial direction and the `both` flag (`:379–389`).** `direction = :both` sets the latch
+`dirWasBoth = true` and the *working* direction starts **forward** (`:389`:
+`ifelse(direction ∈ {both,forward}, forward, backward)`); `direction = :forward` runs forward with
+`dirWasBoth = false`; `:backward` is §4.1. Two more latches carry across iterations: `improvementInBoth`
+(init `true`) and `equalToLastStep` (init `false`). Let `flip(d)` swap forward↔backward.
+
+**Call-consistency (`:347–359`).** A forward or `both` run needs something to add: it errors with
+`ArgumentError` unless at least one of `slopecandidates`, `groupcandidates` is non-empty (or
+`useacross` is set). A backward run ignores any candidate variables (`:361–364`). `fixEfCandidates`
+is out of scope (fixed effects held constant, §0).
+
+**Forward-terminal arc (`:435–453`).** *Before* scoring, if the working direction is forward and the
+forward enumeration is empty (`all candidates null`), the search returns the current incumbent as
+best immediately — forward never descends to the `lm`/`glm` terminal (it only grows). This fires
+regardless of `dirWasBoth`, so a `both` run whose forward sub-step yields nothing also returns here.
+
+**The decision cascade (`:565–657`).** After scoring the merged candidate set, let
+`minCAIC = min caic` (`Inf` if the set is empty after the `mergeChanges` drop-original), `ncands` its
+size, and the predicates: `bestIsGLM` (the argmin candidate is the `lm`/`glm` terminal — backward
+only), `allNA` (the whole candidate set *is* the terminal node — the §0.1 lm-descent, backward only),
+`keepMin` (the argmin equals the keep-minimal model). The branches, in order:
+
+| # | Predicate | Action |
+|:--|:----------|:-------|
+| A | `minCAIC == Inf` | `dirWasBoth`: `flip`, `improvementInBoth←false`, continue. else: **stop**, keep incumbent. |
+| B | `minCAIC ≤ cAICofMod` ∧ [ (`¬dirWasBoth ∧ backward ∧ bestIsGLM`) ∨ (`¬dirWasBoth ∧ backward ∧ keepMin`) ∨ `allNA` ] | **stop**, accept the argmin (terminal/keep-minimal reached). |
+| C | `minCAIC ≤ cAICofMod` ∧ `¬allNA` ∧ `¬equalToLastStep` | if `minCAIC == cAICofMod`: `equalToLastStep←true`. if `steps==0 ∨ ncands==1`: **stop**, accept argmin. else: accept (advance incumbent), `improvementInBoth←true`, `dirWasBoth`: `flip`. |
+| D | `minCAIC ≤ cAICofMod` ∧ `equalToLastStep` ∧ `improvementInBoth` | accept (advance incumbent), `improvementInBoth←false`, `dirWasBoth`: `flip`. (the plateau second move) |
+| E | `minCAIC > cAICofMod` ∧ (`steps==0 ∨ ncands==1`) ∧ `¬dirWasBoth` | **stop**, keep incumbent. |
+| F | `minCAIC ≥ cAICofMod` ∧ `dirWasBoth` ∧ `improvementInBoth` | `flip`, `improvementInBoth←false`, continue. (the `both` no-improvement turn) |
+| G | otherwise | **stop**, keep incumbent. |
+
+`steps` is decremented once per iteration (`:468`); the `steps==0` tests in C/E are the
+budget-exhausted stop. The `equalToLastStep` latch (set in C on a tie, consumed in D) caps a plateau
+at two consecutive equal-cAIC moves, preventing an infinite `both` oscillation between a forward and a
+backward representation of the same structure. `improvementInBoth` records whether the *previous*
+`both` turn advanced: branch F lets a `both` run flip once on a non-improving turn (to try the other
+direction) but not twice in a row, so two consecutive non-improving turns (one per direction) stop the
+search (F fails on the second → G).
+
+> *Worked `both` trace (`pastes_both_cask`):* start forward from `(1|batch)`, group candidate `cask`.
+> **Iter 1** (forward): the sole candidate `(1|batch)+(1|cask)` scores worse → branch F flips to
+> backward, `improvementInBoth←false`. **Iter 2** (backward): single intercept, no keep → the `lm`
+> terminal `strength~1` is scored (worse) → F fails (`improvementInBoth` is false) → branch G stops,
+> keeping `(1|batch)`. Two non-improving turns, one per direction, terminate cleanly.
+
+**Family dispatch** is exactly §4.1's: the forward arc reuses the same three injected closures
+(`score`, candidate refit, terminal fit). The candidate-generation closure dispatches on the working
+direction — [`forwardcandidates`](@ref) with the forward kwargs (`slopecandidates`, `groupcandidates`,
+`maxslopes`, `useacross`, `selectcorrelation`) when forward, [`backwardcandidates`](@ref) with
+(`keep`, `selectcorrelation`, `allownointercept`) when backward.
 
 ## 5. Options, result, and provenance
 
@@ -572,7 +629,12 @@ identical; the *packaging* differs (one ranked vector with the selected at `save
 (2026-05-31). The numbers are the ground-truth check: `c(bestCAIC, attr(additionalModels,"cAICs"))`
 equals `[s.caic for s in result.saved]` within the Level-2 band.
 
-> *(to fill: the `StepcaicOptions` exact field list as the forward/`both` options come online.)*
+**`StepcaicOptions` field list (#41).** The resolved options retained for provenance:
+`direction::Symbol`, `selectcorrelation::Bool`, `allownointercept::Bool`, `steps::Int`,
+`savedmodels::Int`, and the forward-enumeration fields `groupcandidates::Vector{Symbol}`,
+`slopecandidates::Vector{Symbol}`, `maxslopes::Int`, `useacross::Bool` (all concrete, so the struct
+is type-stable). `keep` is *not* retained on the options (it is a `RESpec` floor threaded into the
+backward enumeration, not a scalar provenance field).
 
 ## 6. Validation plan (two-level)
 
