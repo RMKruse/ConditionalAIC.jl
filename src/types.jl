@@ -148,6 +148,15 @@ struct WeightResult{T<:AbstractFloat}
     duration::Float64
 end
 
+# The `caic` scoring options a `modelavg` call used, captured so the Zhang slow path of
+# `getweights` re-scores ρ with the *same* options the candidates were scored under (rather
+# than `caic`'s defaults). Concrete field types — `nboot`'s small `Union{Int,Nothing}` mirrors
+# `caic`'s own signature; `sigmapenalty` is narrowed to `Int` on construction. `rng` is not
+# captured: `modelavg` exposes no `rng` kwarg, so both paths use `default_rng()`.
+const CAICKwargs = NamedTuple{
+    (:method, :hessian, :nboot, :sigmapenalty),Tuple{Symbol,Symbol,Union{Int,Nothing},Int}
+}
+
 """
     ModelAvgResult{T<:AbstractFloat}
 
@@ -169,6 +178,10 @@ candidates (port of `cAIC4`'s `modelAvg`). Returned by [`modelavg`](@ref).
 - `weightresult::Union{Nothing,WeightResult{T}}` — the full [`WeightResult`](@ref) from the
   Zhang-optimal optimizer (weights, objective `J(ŵ)`, duration) when `weighttype == :zhang`;
   `nothing` on the `:smoothed` path.
+- `caickwargs::CAICKwargs` — the `caic` scoring options (`method`, `hessian`, `nboot`,
+  `sigmapenalty`) this `modelavg` call used. Captured so the Zhang slow path of
+  [`getweights`](@ref) re-scores ρ under the *same* options the candidates were scored with,
+  not `caic`'s defaults.
 
 The result is **not** itself a fitted model — it is a pair of name-keyed averaged-coefficient
 vectors plus the weight provenance.
@@ -185,6 +198,7 @@ struct ModelAvgResult{T<:AbstractFloat}
     models::Vector{LinearMixedModel{T}}
     weighttype::Symbol
     weightresult::Union{Nothing,WeightResult{T}}
+    caickwargs::CAICKwargs
 end
 
 # The full model-averaging report (port of `cAIC4`'s `summaryMA`, folded into the result's
