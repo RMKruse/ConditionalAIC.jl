@@ -9,10 +9,13 @@
 end
 
 @testitem "JET static analysis" begin
-    # JET tracks unstable compiler internals and has no release for prerelease
-    # Julia; on `nightly` it is also dropped from the test env (see CI.yml), so
-    # `using JET` must not be reached there. `@static` resolves this at lowering.
-    @static if isempty(VERSION.prerelease)
+    # JET 0.11 transitively requires Julia >= 1.12 (via PrecompileTools 1.3.x), so it is
+    # uninstallable on the 1.10/1.11 LTS matrix; and JET tracks unstable compiler internals
+    # with no release for prerelease Julia. On every version except a released >= 1.12 it is
+    # dropped from the test env (see CI.yml), so `using JET` must not be reached there. The
+    # guard mirrors exactly where JET is installed; `@static` resolves it at lowering so the
+    # `using` is only spliced in when JET is present.
+    @static if VERSION >= v"1.12" && isempty(VERSION.prerelease)
         using JET
 
         JET.test_package(
@@ -28,6 +31,6 @@ end
             ),
         )
     else
-        @info "Skipping JET static analysis on prerelease Julia $(VERSION)"
+        @info "Skipping JET static analysis on Julia $(VERSION) (JET 0.11 needs released Julia >= 1.12)"
     end
 end
