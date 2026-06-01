@@ -6,6 +6,33 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-06-01 — `GLM.jl` internals quarantined in a `GLMInternals` submodule (mirror of `MMInternals`)
+
+**Status:** accepted (architecture — refines ADR-0006 / the 2026-05-30 GLM-dependency entry).
+Milestone M4. File `src/glm_internals.jl`; consumer `src/scoring.jl`.
+
+**What this corrects.** The 2026-05-30 GLM-dependency entry and ADR-0006 state the `lm`/`glm`
+terminal is scored entirely on `GLM.jl`'s **public** surface and therefore has "no quarantine
+impact." That is true for the Gaussian `lm` path, but the `glm` terminal scorer reached into a
+fitted `glm`'s internal `GlmResp` in **two** places — `m.model.rr.d` (the response family, for
+scoring dispatch) and `m.model.rr.wts` (the per-observation binomial trial counts) — directly in
+`src/scoring.jl`. Those are `GLM.jl` *internals*, the exact hazard CLAUDE.md §3's single-touchpoint
+rule exists to contain, only for `GLM` rather than `MixedModels`. They were field-accessed outside
+any quarantine.
+
+**Resolution.** A new `GLMInternals` submodule (`src/glm_internals.jl`) is the `GLM.jl` analogue of
+`MMInternals`: the single, auditable touchpoint for `GLM` internals, carrying its own internal-access
+table pinned to **`GLM = "=1.9.5"`**, a `_drift` shape-assert on each extraction, and the pinned
+`GlmResp` field layout. The two accessors are `glmfamily` (`m.model.rr.d`) and `glmpriorweights`
+(`m.model.rr.wts`); `src/scoring.jl` now routes through them and touches no `GLM` internal directly.
+On a `GLM` version bump, walking this table is required exactly as for the `MixedModels` pin.
+
+**No behaviour change.** This is a pure refactor — the extracted quantities and the scored cAIC are
+bit-identical (the GLM-terminal Level-2 suite, `test/glm_terminal_tests.jl`, passes unchanged). The
+accessors are function-barrier'd so terminal-scoring type stability is preserved.
+
+---
+
 ## 2026-05-31 — `summaryMA` folded into `ModelAvgResult`'s `Base.show` (no standalone `summaryma`); display divergences from `summaryMA`
 
 **Status:** accepted (display-only). Applies to the `ModelAvgResult` display (M4.5; docs/math/0009 §5).
