@@ -122,6 +122,14 @@ const SM = MixedModels.StatsModels
     )
 end
 
+# The exact field-name layout of `GeneralizedLinearMixedModel` (pinned MixedModels
+# v5.5.1), against which [`reduceboundary`](@ref) constructs a reduced GLMM
+# positionally. Guarding the names — not just the per-field types the parametric
+# constructor checks — is what catches a reorder among the many same-typed fields.
+const _GLMM_FIELDS = (
+    :LMM, :β, :β₀, :θ, :b, :u, :u₀, :resp, :η, :wt, :devc, :devc0, :sd, :mult
+)
+
 """
     reml(m::LinearMixedModel) -> Bool
 
@@ -562,6 +570,18 @@ function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
     reduced = _reducedreterms(lmm.reterms, T, "m.LMM.reterms element")
     reduced === nothing && return nothing
 
+    # The 14-arg construction below is purely positional, and eight fields share
+    # `Vector{T}` (β, β₀, η, wt, devc, devc0, sd, mult) while three share
+    # `Vector{Matrix{T}}` (b, u, u₀) — so a field *reorder* among same-typed fields in
+    # a future MixedModels would be silently accepted by the parametric constructor,
+    # yielding a wrong reduced model with no error. Pin the exact field-name layout so
+    # any reorder/rename/addition/removal fails loud here rather than downstream.
+    fieldnames(GeneralizedLinearMixedModel) === _GLMM_FIELDS || _drift(
+        "GeneralizedLinearMixedModel field layout",
+        _GLMM_FIELDS,
+        fieldnames(GeneralizedLinearMixedModel),
+    )
+
     y = glmmresponse(m)                       # m.resp.y, shape-asserted to Vector{T}
     β = m.β
     β isa Vector{T} || _drift("m.β", Vector{T}, β)
@@ -587,6 +607,16 @@ function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
         similar(vv),
         similar(vv),
         similar(vv),
+    )
+    # Sanity-check that the positional args landed in dimensionally coherent fields: the
+    # fixed-effects vector is length rank(X) and the per-observation buffers are length n.
+    # A reorder that swapped a length-p field with a length-n one (undetectable by the
+    # name check if upstream also renamed) surfaces here before the refit consumes it.
+    (length(mr.β) == length(β) && length(mr.η) == length(y)) || _drift(
+        "reduced GLMM dimensions (β: $(length(mr.β))≠$(length(β)), η: \
+         $(length(mr.η))≠$(length(y)))",
+        "β length $(length(β)), η length $(length(y))",
+        mr,
     )
     fit!(mr; fast=false, nAGQ=1, progress=false)
     return mr
