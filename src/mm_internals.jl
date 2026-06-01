@@ -18,6 +18,7 @@ first.
 | Touchpoint        | Kind        | Used by             | Extracted quantity                                       |
 |:------------------|:------------|:--------------------|:---------------------------------------------------------|
 | `m.optsum.REML`   | field       | [`reml`]            | REML flag (`Bool`); which objective was fitted           |
+| `mb.optsum.REML =`| field (mutating write) | [`bootstrapfit`] | set the bootstrap LMM's REML flag (from [`reml`](@ref)) so it optimises the same objective as the original before refitting |
 | `m.optsum.returnvalue` | field  | [`converged`]       | optimizer return code (`Symbol`); non-converged when in the failure modes |
 | `m.sigma`         | property    | [`sigmahat`]        | residual standard deviation σ̂                            |
 | `ranef(m)`        | exported fn | [`bhat`]            | predicted random effects b̂ = λu, per grouping            |
@@ -33,7 +34,7 @@ first.
 | `m.feterm`        | field       | [`reduceboundary`]  | the fixed-effects term `FeTerm`, reused by the reduced fit|
 | `m.formula`       | field       | [`reduceboundary`]  | the model formula (bookkeeping for the reduced-fit ctor) |
 | `re.trm/refs/levels/cnames/z/scratch` | fields | [`reduceboundary`] | `ReMat` design pieces, column-subset to rebuild a reduced `ReMat` |
-| `ReMat{T,S}(…)`   | constructor | [`reduceboundary`]  | rebuild a boundary-reduced random-effects term            |
+| `ReMat{T,S}(…)`   | constructor (10-slot positional) | [`reduceboundary`], [`bootstrapfit`] | rebuild a boundary-reduced random-effects term; the field-name layout is pinned via `_REMAT_FIELDS` (drift-guarded in [`_subsetreterm`]) and the reduced design is passed into **both** the `z` and `wtz` slots — valid because they alias for an unweighted term |
 | `adjA(refs, z)`   | fn          | [`reduceboundary`]  | the `ReMat` adjoint sparse block for the subset design    |
 | `LinearMixedModel(y, feterm, reterms, form)` | constructor | [`reduceboundary`] | assemble the reduced model from reused design objects |
 | `fit!(m)`         | exported fn | [`reduceboundary`], [`bootstrapfit`] | refit the reduced / bootstrap model       |
@@ -54,6 +55,8 @@ first.
 | `m.wt`            | field       | [`reduceboundary`]  | GLMM prior weights; empty for an unweighted fit (then a length-`n` ones vector is supplied) |
 | `m.resp`          | field       | [`reduceboundary`]  | the `GlmResp` (family/link/response), deep-copied into the reduced GLMM |
 | `vsize(t)` / `nlevs(t)` | unexported fns | [`reduceboundary`] | per-reterm random-effect width and group count — size the reduced `u` scratch |
+| `rlmm.reterms`    | field       | [`reduceboundary`]  | reterms of the freshly-built reduced working LMM — iterated (with `vsize`/`nlevs`) to allocate the reduced GLMM's `u`/`u₀`/`b` scratch |
+| `rlmm.θ`          | property    | [`reduceboundary`]  | initial θ of the reduced working LMM (identity λ) — passed into the reduced GLMM's `θ` constructor slot |
 | `GeneralizedLinearMixedModel{T,D}(…)` | constructor | [`reduceboundary`] | assemble the reduced GLMM around the reduced working LMM |
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
@@ -129,6 +132,17 @@ end
 const _GLMM_FIELDS = (
     :LMM, :β, :β₀, :θ, :b, :u, :u₀, :resp, :η, :wt, :devc, :devc0, :sd, :mult
 )
+
+# The exact field-name layout of `ReMat` (pinned MixedModels v5.5.1), against which
+# [`_subsetreterm`](@ref) rebuilds a boundary-reduced random-effects term via the 10-slot
+# positional constructor. The reduced design `znew` is passed into BOTH the `z` (slot 5) and
+# `wtz` (slot 6) slots — valid only because they alias for an unweighted term (the `ReMat`
+# docstring: "z and wtz are the same object for unweighted cases"). A reorder among the
+# same-typed slots (`z`/`wtz`, both `Matrix{T}`; `refs`/`inds`; the design/scratch matrices)
+# would be silently accepted by the positional constructor, yielding a malformed `ReMat` with
+# no error — so pin the names and fail loud on drift, exactly as `_GLMM_FIELDS` guards the
+# GLMM constructor.
+const _REMAT_FIELDS = (:trm, :refs, :levels, :cnames, :z, :wtz, :λ, :inds, :adjA, :scratch)
 
 """
     reml(m::LinearMixedModel) -> Bool
@@ -373,6 +387,12 @@ function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
         indsnew = [i + (j - 1) * Snew for j in 1:Snew for i in j:Snew]
     end
     scratchnew = Matrix{T}(undef, Snew, size(re.scratch, 2))
+    # The 10-arg construction below is purely positional; `znew` lands in both the `z` and
+    # `wtz` slots, and several same-typed fields neighbour each other — so a field reorder in
+    # a future MixedModels would be silently accepted, yielding a malformed `ReMat`. Pin the
+    # exact field-name layout so any reorder/rename/addition fails loud here.
+    fieldnames(ReMat) === _REMAT_FIELDS ||
+        _drift("ReMat field layout", _REMAT_FIELDS, fieldnames(ReMat))
     return ReMat{T,Snew}(
         re.trm,
         re.refs,
@@ -511,7 +531,7 @@ function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
         _subsetreterm(re, collect(1:size(re.λ, 1))) for re in m.reterms
     ]
     mb = LinearMixedModel(y_star, m.feterm, fresh_reterms, m.formula)
-    mb.optsum.REML = m.optsum.REML
+    mb.optsum.REML = reml(m)   # mutating write — propagate the original's objective (table)
     fit!(mb; progress=false)
     return conditionalmean(mb)
 end
