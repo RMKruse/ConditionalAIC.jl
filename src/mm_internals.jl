@@ -24,7 +24,7 @@ first.
 | `m.X`             | field       | [`fixedeffects`]    | n×p fixed-effects design X                                |
 | `response(m)`     | exported fn | [`responsevec`]     | response vector y                                        |
 | `fitted(m)`       | exported fn | [`conditionalmean`] | conditional fitted mean ŷ = Xβ̂ + Zb̂                      |
-| `leverage(m)`     | exported fn | [`rho0`]            | per-observation hat-matrix diagonal; ρ₀ = its sum (§2)   |
+| `leverage(m)`     | exported fn | [`rho0`]            | per-observation hat-matrix diagonal; ρ₀ = its sum       |
 | `m.reterms`       | field       | [`retermdesigns`], [`reduceboundary`] | the per-grouping `ReMat`s                  |
 | `Matrix(re)`      | constructor | [`retermdesigns`]   | dense random-effects design Z block (n×qₜ) per reterm    |
 | `re.λ`            | field       | [`retermlambdas`], [`reduceboundary`] | relative covariance factor λ block (kₜ×kₜ) |
@@ -58,7 +58,7 @@ first.
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
-| `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (M4 RE-structure read) |
+| `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (RE-structure read) |
 | `MixedModels.schematize(f, data, contrasts)` | unexported fn | [`reterminfo`] | apply the model schema to a `keep` formula fragment so its `|` bars become RE terms |
 | `m.formula.lhs`   | field       | [`responseterm`]    | formula response term; the `lhs` of the rendered candidate formula             |
 | `RandomEffectsTerm` (`.lhs`/`.rhs`) | type/fields | [`reterminfo`] | a correlated RE term: `.lhs` directions `MatrixTerm`, `.rhs` grouping `CategoricalTerm` |
@@ -233,8 +233,8 @@ end
     rho0(m::LinearMixedModel{T}) -> T
 
 The naive plug-in effective degrees of freedom `ρ₀ = tr(H₁) = sum(leverage(m))` — the
-trace of the hat matrix `y ↦ ŷ` at the fitted, fixed variance parameters
-(`docs/math/0002` §2). `leverage(m)` returns the per-observation hat-matrix *diagonal*; ρ₀
+trace of the hat matrix `y ↦ ŷ` at the fitted, fixed variance parameters.
+`leverage(m)` returns the per-observation hat-matrix *diagonal*; ρ₀
 is its sum. This is the `MixedModels`-native ρ₀ (computed via triangular solves against the
 fit's Cholesky `L`), used to cross-check the bias correction (`ρ ≥ ρ₀`).
 """
@@ -262,7 +262,7 @@ end
 The relative covariance factor `λ` block (`re.λ`, `kₜ×kₜ` lower-triangular, dense) for each
 reterm. The per-group relative covariance is `λ λᵀ`; together with [`retermdesigns`](@ref)
 and [`parmap`](@ref) it fixes the scaled marginal variance `V₀ = Iₙ + Z λλᵀ Zᵀ` and the
-derivative matrices `Wⱼ` (`docs/math/0002` §3, §6).
+derivative matrices `Wⱼ`.
 """
 function retermlambdas(m::LinearMixedModel{T}) where {T}
     return Matrix{T}[Matrix(re.λ) for re in m.reterms]
@@ -273,7 +273,7 @@ end
 
 The free-covariance-parameter map `m.parmap` — the `lme4` `Lind` analogue. Entry `s` is
 `(t, i, j)`: the `s`-th component `θₛ` occupies position `(i, j)` of reterm `t`'s `λ`
-block. This drives the `Wⱼ` derivative-pattern construction (`docs/math/0002` §6).
+block. This drives the `Wⱼ` derivative-pattern construction.
 """
 function parmap(m::LinearMixedModel)
     pm = m.parmap
@@ -392,17 +392,17 @@ end
 The `s×s` numeric Hessian **B** of the (restricted) profile objective with respect to the
 variance parameters θ, evaluated at the fitted θ̂, on the **deviance scale** (−2·profile
 log-likelihood for ML, the REML criterion for REML) — the scale `cAIC4`'s `analytic = FALSE`
-path consumes (`docs/math/0004` §1, §3). `s = length(m.θ)`. Dispatches on `source`:
+path consumes. `s = length(m.θ)`. Dispatches on `source`:
 
 - `:finitediff` — **self-driven** finite differences over `MixedModels`' *stable*
   `objective!`/`setθ!`/`updateL!` API, **not** `MixedModelsFiniteDiffExt`.
   `objective!(m, θ)` mutates `m`, so `FiniteDiff` leaves it parked at its last probe; the
   driver restores θ̂ in a `finally` and **fails loud** if the restoration did not take — a
-  Hessian computed against a silently-mutated fit is a defect (`docs/math/0004` §3b).
+  Hessian computed against a silently-mutated fit is a defect.
 - `:forwarddiff` — rides the **experimental** `MixedModelsForwardDiffExt`
   (`ForwardDiff.hessian(m)`), the only B-source on experimental surface. It
-  differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing
-  of `docs/math/0004` §3a; the result type is shape-asserted against the `=5.5.1` pin.
+  differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing;
+  the result type is shape-asserted against the `=5.5.1` pin.
 
 The `s×s` result is shape-asserted: the experimental AD surface may change which parameters
 are differentiated alongside θ, which would silently alter B's dimension — the assertion
@@ -498,10 +498,10 @@ Whether **every** random-effect variance direction in the GLMM is on the boundar
 (`λ[d, d] = 0` for all `d` in every reterm of the working LMM `m.LMM`). This is the
 GLMM analogue of `reduceboundary(m.LMM) === nothing` for the Gaussian path: when
 fully singular, the GLMM collapses to a plain GLM and the cAIC df is `rank(X)` with
-no σ-penalty (`docs/math/0006-glmm-bias-correction.md §5`).
+no σ-penalty.
 
 Returns `false` for partial singularity (some but not all directions on the boundary)
-or for a non-singular fit — those cases are handled by the general M3 influence paths
+or for a non-singular fit — those cases are handled by the general GLMM influence paths
 (not yet implemented).
 """
 function glmmisfullysingular(m::GeneralizedLinearMixedModel)
@@ -537,11 +537,8 @@ the returned model shares no mutable state with `m`.
 The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref ConditionalAIC.caic)
 cascades until non-singular). Returns `nothing` when **every** random-effect direction is on
 the boundary (no random-effects model remains — the caller falls back to the
-fixed-effects-only score ρ = rank(X), `docs/math/0006-glmm-bias-correction.md §5`), mirroring
+fixed-effects-only score ρ = rank(X)), mirroring
 the `LinearMixedModel` method and `cAIC4`'s `glm` branch.
-
-The reduction logic and the reconstruction are pinned in
-`docs/math/0007-glmm-partial-singularity-reduction.md` §1–§3.
 """
 function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
     lmm = m.LMM
@@ -753,7 +750,7 @@ a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Berno
 non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
 
 Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
-distribution for conditional bootstrap draws (`docs/math/0006` §5).
+distribution for conditional bootstrap draws.
 """
 function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
     wts = m.resp.wts

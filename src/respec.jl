@@ -44,7 +44,7 @@ add/drop transforms on a `RESpec` and renders it back to a formula only at fit t
 ([`render`](@ref ConditionalAIC.render)); [`extract`](@ref ConditionalAIC.extract) is the inverse read.
 
 Compared **by value** (`==`, field-wise over `groups`): structural equality, the round-trip
-oracle of `docs/math/0008-stepcaic-search.md` §1.4.
+oracle.
 """
 struct RESpec
     groups::Vector{REGroup}
@@ -117,10 +117,10 @@ trailing `term(0)` appended when no intercept is present (`cnmsConverter`'s `"0"
 directions are grouped `… | term(grouping)` and wrapped in `zerocorr` when uncorrelated.
 
 The result is accepted by `fit(MixedModel, render(…), data)`; the round-trip
-`extract(refit(render(extract(m)))) == extract(m)` holds (doc 0008 §1.4).
+`extract(refit(render(extract(m)))) == extract(m)` holds.
 
 # Throws
-- `ArgumentError` if `spec` is empty — a no-RE formula is the `lm`/`glm` terminal (§0.1), not
+- `ArgumentError` if `spec` is empty — a no-RE formula is the `lm`/`glm` terminal, not
   a `MixedModel` formula (`MixedModels` requires ≥ 1 `|` term).
 """
 function render(spec::RESpec, fixed, lhs)

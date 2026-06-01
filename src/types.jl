@@ -13,7 +13,7 @@ The fields are the public, typed accessors:
 - `caic::T` — the conditional AIC value.
 - `dof::T` — the bias-corrected effective degrees of freedom ρ (the penalty term).
 - `condloglik::T` — the conditional log-likelihood ℓ(y | b̂, β̂, θ̂) (the `cAIC4`
-  `getcondLL` quantity).
+  conditional log-likelihood quantity).
 - `reducedmodel::Union{Nothing,M}` — the reduced model a singular fit was scored on, or
   `nothing` when the fit was non-singular and scored as given (always `nothing` for the
   never-singular `lm`/`glm` terminal).
@@ -124,17 +124,17 @@ end
     WeightResult{T<:AbstractFloat}
 
 The result of Zhang-optimal weight optimization over a set of Gaussian
-`LinearMixedModel{T}` candidates (port of `cAIC4`'s `getWeights`/`.weightOptim`).
+`LinearMixedModel{T}` candidates (port of `cAIC4`'s weight optimizer).
 Returned by [`getweights`](@ref).
 
 The Zhang (2014) Mallows criterion J(w) = (y − μw)ᵀ(y − μw) + 2σ̂²(ρᵀw) is minimised
 over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
-Lagrangian SQP of `cAIC4`'s `.weightOptim` (docs/math/0009 §2).
+Lagrangian SQP of `cAIC4`'s weight optimizer.
 
 - `weights::Vector{T}` — the optimal model-averaging weights; non-negative and summing to 1.
-- `objective::T` — the minimised Mallows criterion J(ŵ) (the `functionvalue` of `getWeights`).
+- `objective::T` — the minimised Mallows criterion J(ŵ) (the objective value of the weight optimizer).
 - `duration::Float64` — wall-clock seconds for the optimization (excluded from reproducibility
-  assertions per docs/math/0009 §6.5).
+  assertions).
 """
 struct WeightResult{T<:AbstractFloat}
     weights::Vector{T}

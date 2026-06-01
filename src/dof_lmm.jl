@@ -2,14 +2,12 @@
     ConditionalAIC.DofLMM
 
 Greven–Kneib bias-corrected **effective degrees of freedom** ρ for a Gaussian linear
-mixed model — the port of `cAIC4`'s `calculateGaussianBc` (`analytic = TRUE`).
+mixed model — the port of `cAIC4`'s analytic Gaussian bias correction.
 
-This module is the **Level-1 isolation unit**: a *pure, fit-independent,
-parametrisation-neutral* map from a component set ([`GaussianComponents`](@ref)) to the
-scalar ρ. It touches **no** `MixedModels` object; it consumes dense components in
-`cAIC4`'s `getModelComponents.merMod` layout and reproduces the exact arithmetic of
-`calculateGaussianBc`. The mathematics is pinned in `docs/math/0002-gaussian-bias-correction.md`
-(§3 the component layout, §4 the closed-form B/C and the ρ assembly).
+This module is a *pure, fit-independent, parametrisation-neutral* map from a component
+set ([`GaussianComponents`](@ref)) to the scalar ρ. It touches **no** `MixedModels`
+object; it consumes dense components in `cAIC4`'s `getModelComponents.merMod` layout and
+reproduces the exact arithmetic of `cAIC4`'s analytic Gaussian bias correction.
 
 Every kernel uses the numerically-stable [`ConditionalAIC.Numerics`](@ref) primitives: the Fisher
 trace term `tr(Wⱼ M Wₖ M)` is formed by `traceprod` without materialising the product,
@@ -26,10 +24,10 @@ using ..Numerics: traceprod
     GaussianComponents{T<:AbstractFloat}
 
 The Gaussian-LMM bias-correction component set, in `cAIC4`'s `getModelComponents.merMod`
-layout (`docs/math/0002` §3). All matrices are dense and parametrisation-neutral — this
-type carries *no* `θ`-vector and no fitted model, so the correction arithmetic is tested
-in isolation from any fit. Targets the **unweighted** Gaussian path
-(`R = Iₙ`, so `R A = A`), the M2 scope; weighted Gaussian is deferred, matching `cAIC4`.
+layout. All matrices are dense and parametrisation-neutral — this type carries *no*
+`θ`-vector and no fitted model, so the correction arithmetic is tested in isolation from
+any fit. Targets the **unweighted** Gaussian path (`R = Iₙ`, so `R A = A`); weighted
+Gaussian is deferred, matching `cAIC4`.
 
 The number of observations is `n = length(e)`, the number of free covariance components
 is `s = length(Wlist)`, and the fixed-effects rank is `p = size(X, 2)`.
@@ -37,11 +35,11 @@ is `s = length(Wlist)`, and the fixed-effects rank is `p = size(X, 2)`.
 # Fields
 - `X::Matrix{T}`: the `n×p` fixed-effects design. Only its column count `p` enters the
   correction (the REML degrees `nθ = n − p`); it is carried to match `cAIC4`'s `model\$X`.
-- `e::Vector{T}`: the `n` conditional residual `e = y − ŷ = A y` (§0).
+- `e::Vector{T}`: the `n` conditional residual `e = y − ŷ = A y`.
 - `A::Matrix{T}`: the `n×n` fixed-effects-adjusted projector
   `A = V₀⁻¹ − V₀⁻¹X(XᵀV₀⁻¹X)⁻¹XᵀV₀⁻¹`.
 - `V0inv::Matrix{T}`: the `n×n` inverse scaled marginal variance `V₀⁻¹`.
-- `Wlist::Vector{Matrix{T}}`: the `s` derivative matrices `Wⱼ = Z Dⱼ Zᵀ` (each `n×n`; §6).
+- `Wlist::Vector{Matrix{T}}`: the `s` derivative matrices `Wⱼ = Z Dⱼ Zᵀ` (each `n×n`).
 - `eWelist::Vector{T}`: the `s` residual quadratic forms `eᵀ Wⱼ e`.
 - `tye::T`: the scalar `tʸᵉ = yᵀe = yᵀ A y`.
 - `isREML::Bool`: whether the fit used REML (selects `Wⱼ A` and `nθ = n − p`) or ML
@@ -117,14 +115,14 @@ end
 
 The Greven–Kneib bias-corrected effective degrees of freedom ρ of a Gaussian LMM — the
 penalty term of the conditional AIC `cAIC = −2 ℓ_cond + 2ρ`. A faithful port of
-`cAIC4::calculateGaussianBc(model, sigma.penalty, analytic = TRUE)`.
+`cAIC4`'s analytic Gaussian bias correction (`analytic = TRUE`).
 
 # Mathematical background
 
 With `n` observations, `s` free covariance components, fixed-effects rank `p`, residual
 `e`, projector `A`, inverse scaled marginal variance `V₀⁻¹`, derivative matrices
 `Wⱼ = Z Dⱼ Zᵀ`, quadratic forms `eᵀWⱼe`, and `tʸᵉ = yᵀe`, define `M = V₀⁻¹` (ML) or
-`M = A` (REML) and `nθ = n` (ML) or `nθ = n − p` (REML). Build (doc 0002 §4)
+`M = A` (REML) and `nθ = n` (ML) or `nθ = n − p` (REML). Build
 
 ```math
 C_{j,:} = A W_j e - \\frac{e^{\\mathsf T} W_j e}{2\\,t^{ye}}\\, e^{\\mathsf T},
@@ -143,7 +141,7 @@ solve `Λ̂ʸ = B⁻¹ C` (factorisation, no inverse), and assemble
 ```
 
 The Greven–Kneib term `Σⱼ …` corrects `ρ₀ = tr(H₁)` for the estimation of `θ`, giving
-`ρ ≥ ρ₀` (doc 0002 §5).
+`ρ ≥ ρ₀`.
 
 # Arguments
 - `c`: the [`GaussianComponents`](@ref) (unweighted Gaussian path, `R = Iₙ`).
@@ -212,8 +210,8 @@ end
                     sigmapenalty::Integer = 1) -> T
 
 The Greven–Kneib bias-corrected effective degrees of freedom ρ with an **externally
-supplied** Hessian `B` — the port of `cAIC4::calculateGaussianBc(model, sigma.penalty,
-analytic = FALSE)`. This is the assembly behind the `:forwarddiff` and `:finitediff`
+supplied** Hessian `B` — the port of `cAIC4`'s numeric Gaussian bias correction
+(`analytic = FALSE`). This is the assembly behind the `:forwarddiff` and `:finitediff`
 B-sources of [`caic`](@ref ConditionalAIC.caic): the curvature `B` of the (restricted) profile log-likelihood
 is obtained numerically rather than from the closed form, and only the cross-product `C`
 and the final ρ assembly are recomputed here.
@@ -221,8 +219,8 @@ and the final ρ assembly are recomputed here.
 # Mathematical background
 
 With the notation of [`dof_lmm`](@ref) and `nθ = n` (ML) or `nθ = n − p` (REML), the
-numeric path leaves `B` external and rescales the cross-product (doc 0004 §2; cf.
-`calculateGaussianBc` lines 59–70):
+numeric path leaves `B` external and rescales the cross-product (matching `cAIC4`'s
+numeric Gaussian bias correction):
 
 ```math
 C_{j,:} = \\frac{2\\,n_\\theta}{t^{ye}}
@@ -284,15 +282,14 @@ end
     efron_penalty(yhat, sigma, Ystar, Yhatstar, sigmapenalty=0) -> T
 
 Efron's covariance penalty (the parametric-bootstrap effective degrees of freedom) —
-the faithful port of `cAIC4`'s `conditionalBootstrap` df estimator. A **Level-1 isolation
-unit**: pure, fit-independent, and testable without any `MixedModels` object.
+the faithful port of `cAIC4`'s conditional-bootstrap df estimator. Pure, fit-independent,
+and testable without any `MixedModels` object.
 
 # Mathematical background
 
 With `n` observations, `B ≥ 2` bootstrap draws, residual standard deviation `σ̂`,
 bootstrap responses `Y*` (`n×B`) with row means `ȳ*ᵢ = (1/B) Σ_b y*(b)ᵢ`, and
 bootstrap conditional means `Ŷ*` (`n×B`), `cAIC4`'s estimator is
-(`R/conditionalBootstrap.R` v1.1 lines 23–25; cf. `docs/math/0005` §3)
 
 ```math
 \\rho = \\frac{1}{(B - 1)\\,\\hat\\sigma^{2}}
@@ -305,16 +302,16 @@ The centring is on the **bootstrap row mean** `ȳ*ᵢ` (not the original fit `ŷ
 the divisor is the **unbiased** `B − 1`, making the assembly the standard sample-
 covariance estimator of `cov(y, ŷ) / σ²`. The `yhat` argument is *unused*
 arithmetically — it is carried in the signature for symmetry with the analytic /
-numeric Level-1 units (and for caller readability), and exists to match the original
+numeric units (and for caller readability), and exists to match the original
 fit's conditional mean that the spine constructs `Y*` around.
 
 Each draw `y*(b) = ŷ + σ̂ ε(b)`, `ε ~ N(0,I)` is a parametric bootstrap sample; the
 corresponding `ŷ*(b)` is the conditional mean of a fresh model fit to `y*(b)`. The
 `sigmapenalty` term is the package's σ²-parameter count, added by the spine for
-interface symmetry with the analytic path; `cAIC4`'s `conditionalBootstrap` itself
-does not add one (`R/bcMer.R` routes `sigma.penalty` only to `biasCorrectionGaussian`).
-The default here is therefore `0` — matching `cAIC4`'s bare arithmetic — and the
-Level-1 fixture compares against the same.
+interface symmetry with the analytic path; `cAIC4`'s conditional-bootstrap estimator
+itself does not add one (`cAIC4` routes `sigma.penalty` only to its Gaussian bias
+correction). The default here is therefore `0` — matching `cAIC4`'s bare arithmetic —
+and the fixture compares against the same.
 
 # Arguments
 - `yhat`: the `n`-vector conditional fitted mean `ŷ` of the original fit (carried for

@@ -33,7 +33,7 @@ otherwise — the fail-loud strengthening of `cAIC4`'s unchecked `getME(m[[1]], 
 - `m1, rest...`: one or more fitted Gaussian `LinearMixedModel` objects of the same float
   type.
 - `weights`: the weight scheme. `:zhang` (the default) is the Zhang-optimal Mallows-criterion
-  weights via the transcribed `solnp` SQP (docs/math/0009 §1–2). `:smoothed` is the
+  weights via the transcribed `solnp` SQP. `:smoothed` is the
   Buckland (1997) exponential-cAIC smoothed weights `wᵢ = exp(−Δᵢ/2)/Σ exp(−Δ/2)`,
   `Δᵢ = cAICᵢ − min cAIC`, computed in log-space.
 - `method, hessian, nboot, sigmapenalty`: forwarded unchanged to [`caic`](@ref) for every
@@ -226,7 +226,7 @@ seen in training — matching `lme4`'s default `re.form = NULL`.
 
 The model-averaged prediction is a **stable functional** of the weights: when the candidates'
 conditional-mean vectors are collinear (`MᵀM` singular) the weight vector `ŵ` is non-unique,
-but `ŷ^MA` is invariant across the flat optimum directions (docs/math/0009 §7).
+but `ŷ^MA` is invariant across the flat optimum directions.
 
 # Arguments
 - `res`: a [`ModelAvgResult`](@ref) (from [`modelavg`](@ref)); its `weights` and candidate
@@ -236,7 +236,7 @@ but `ŷ^MA` is invariant across the flat optimum directions (docs/math/0009 §7)
   construct the prediction model.
 - `new_re_levels`: how previously-unobserved grouping levels are handled, forwarded to
   `MixedModels.predict`. **Default `:error`** — mirrors `lme4`'s `allow.new.levels = FALSE`
-  (DECISIONS 2026-05-31; this overrides `MixedModels`' own `:missing` default). `:population`
+  (this overrides `MixedModels`' own `:missing` default). `:population`
   (treat the random effect as 0) and `:missing` are opt-in.
 
 # Returns
@@ -288,10 +288,10 @@ J(w) = (y - \\mu w)^{\\!\\top}(y - \\mu w) + 2\\hat\\sigma^2(\\rho^{\\!\\top} w)
 ```
 
 over the unit simplex 𝒲 = {w ≥ 0, Σwᵢ = 1} via the transcribed `solnp` augmented-
-Lagrangian SQP of `cAIC4`'s `.weightOptim` (docs/math/0009 §2).
+Lagrangian SQP of `cAIC4`'s weight optimizer.
 
 `σ̂²` is taken from the candidate with the largest effective df (full-precision ρᵢ from
-`caic`; cf. cAIC4's `which.max(modelcAIC\$df)`, docs/math/0009 §6.1).
+`caic`; cf. cAIC4's selection of the maximum-df candidate).
 
 # Arguments
 - `res`: a [`ModelAvgResult`](@ref) (from [`modelavg`](@ref)). The candidate models,

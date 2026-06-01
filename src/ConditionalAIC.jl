@@ -6,13 +6,13 @@ mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStat
 — a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
 
 [`caic`](@ref) scores a fitted model by its conditional AIC: a Gaussian `LinearMixedModel`
-via the analytic Greven–Kneib bias correction (M2), a `GeneralizedLinearMixedModel`
-via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df (M3), or — as the
+via the analytic Greven–Kneib bias correction, a `GeneralizedLinearMixedModel`
+via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df, or — as the
 terminal node a backward `stepcaic` search reaches when the last random-effects term is dropped —
-a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`, M4). All assemble into
-a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC (M2.5),
+a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`). All assemble into
+a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC,
 returning an [`AnocaicTable`](@ref). [`stepcaic`](@ref) runs conditional stepwise random-effects
-selection (M4, backward direction), returning a [`StepcaicResult`](@ref). All access to
+selection (backward direction), returning a [`StepcaicResult`](@ref). All access to
 `MixedModels.jl` internals is quarantined in the [`ConditionalAIC.MMInternals`](@ref) submodule.
 """
 module ConditionalAIC

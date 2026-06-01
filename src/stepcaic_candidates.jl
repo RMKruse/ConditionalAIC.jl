@@ -330,15 +330,15 @@ end
         -> Vector{RESpec}
 
 Enumerate the random-effects structures one direction **smaller** than `spec` — the faithful
-port of `cAIC4`'s internal `backwardStep`, the backward branch of the `stepcaic` search (M4).
+port of `cAIC4`'s backward random-effects elimination, the backward branch of the `stepcaic` search.
 
 Each returned [`RESpec`](@ref) is a neighbour obtained by dropping a single random-effects
-direction (a slope, an intercept, or a whole term) from `spec`, after `cAIC4`'s `checkREs`
+direction (a slope, an intercept, or a whole term) from `spec`, after `cAIC4`'s
 de-duplication and its two structural filters. An **empty** result is the terminal/exhausted
 signal — the image of `cAIC4`'s `NA` return and of an empty candidate list; the `lm`/`glm`
 no-random-effects terminal is not itself a `RESpec` and so is never an element.
 
-The enumeration runs on the `cnms` representation `cAIC4` uses (docs/math/0008 §2.1): `spec` is
+The enumeration runs on the `cnms` representation `cAIC4` uses: `spec` is
 lowered to the repeated-name `cnms` form, transformed, and each surviving candidate lifted back
 to a `RESpec`; the result is de-duplicated by the canonical term-multiset encoding.
 
@@ -346,9 +346,9 @@ to a `RESpec`; the result is de-duplicated by the canonical term-multiset encodi
 - `spec::RESpec` — the structure to enumerate neighbours of.
 - `keep::Union{Nothing,RESpec}` — directions that must survive every candidate (the `cAIC4`
   `keep` floor, parsed to a `RESpec`); `nothing` for no floor.
-- `selectcorrelation::Bool` — when `false` (default), `removeUncor` drops candidates that encode
-  a correlated→uncorrelated split.
-- `allownointercept::Bool` — when `false` (default), `removeNoInt` strips intercept-less terms,
+- `selectcorrelation::Bool` — when `false` (default), candidates that encode
+  a correlated→uncorrelated split are dropped.
+- `allownointercept::Bool` — when `false` (default), intercept-less terms are stripped,
   dropping candidates left empty.
 
 # Returns
@@ -500,16 +500,16 @@ end
                       maxslopes=2, useacross=false, selectcorrelation=false) -> Vector{RESpec}
 
 Enumerate the random-effects structures one direction **larger** than `spec` — the faithful port of
-`cAIC4`'s internal `forwardStep`, the forward branch of the `stepcaic` search (M4).
+`cAIC4`'s forward random-effects addition, the forward branch of the `stepcaic` search.
 
 Each returned [`RESpec`](@ref) adds a single random-effects direction to `spec`: a new slope on an
 existing term, a new term over an existing grouping, or a new grouping factor — after `cAIC4`'s
-`checkREs` de-duplication (including its hierarchical-order collapse), the structural filters, and
+de-duplication (including its hierarchical-order collapse), the structural filters, and
 the *one-direction-larger* restriction. An **empty** result is the terminal/exhausted signal — the
 image of `cAIC4`'s `NULL` return when no admissible enlargement exists. Forward has no `keep` and no
 `allownointercept`: intercept-less enlargements (e.g. a `(slope | newgroup)` term) are admissible.
 
-The enumeration runs on the `cnms` representation `cAIC4` uses (docs/math/0008 §2.1): `spec` is
+The enumeration runs on the `cnms` representation `cAIC4` uses: `spec` is
 lowered to the repeated-name `cnms` form, transformed, and each surviving candidate lifted back to a
 `RESpec`, de-duplicated by the canonical term-multiset encoding.
 
@@ -520,8 +520,8 @@ lowered to the repeated-name `cnms` form, transformed, and each surviving candid
 - `maxslopes::Int` — cap on slopes per grouping (`cAIC4` `numberOfPermissibleSlopes`); the combo size
   is `maxslopes + 1`, the `+1` reserving the intercept slot.
 - `useacross::Bool` — when `true`, existing slopes may migrate to other groupings (`allowUseAcross`).
-- `selectcorrelation::Bool` — when `false` (default), uncorrelated splits are rejected (the same-name
-  filter and `removeUncor`); when `true` they are admissible candidates.
+- `selectcorrelation::Bool` — when `false` (default), uncorrelated splits are rejected by the
+  same-name filter; when `true` they are admissible candidates.
 
 # Returns
 - `Vector{RESpec}` — the de-duplicated forward neighbours; empty at the terminal.

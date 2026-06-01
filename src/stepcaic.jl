@@ -18,7 +18,7 @@
 One scored neighbour of a [`stepcaic`](@ref) step — the candidate random-effects structure, its
 conditional AIC, and the bias-corrected effective degrees of freedom ρ (`dof`) that AIC was
 penalised by (the `cAIC`/`df` pair `cAIC4`'s `stepcAIC` trace/`aicTab` prints per candidate).
-`spec === nothing` marks the `lm`/`glm` terminal node (no `RESpec`, §0.1). Part of a
+`spec === nothing` marks the `lm`/`glm` terminal node (no `RESpec`). Part of a
 [`StepRecord`](@ref).
 """
 struct ScoredCandidate{T<:AbstractFloat}
@@ -48,7 +48,7 @@ end
 
 The resolved [`stepcaic`](@ref) options retained for provenance (`cAIC4`'s call record analogue).
 The forward / `both` enumeration options (`groupcandidates`, `slopecandidates`, `maxslopes`,
-`useacross`) carry the forward arc's resolved settings (M4 §5.1); they are empty/defaulted for a
+`useacross`) carry the forward arc's resolved settings; they are empty/defaulted for a
 pure backward run. `skipnonconverged` records whether non-converged candidates were excluded from
 the comparison (the `cAIC4` `calcNonOptimMod` analogue). `keep` is not retained here — it is a
 [`RESpec`](@ref) floor threaded into the backward enumeration, not a scalar provenance field.
@@ -157,8 +157,7 @@ end
              rng=Random.default_rng()) -> StepcaicResult
 
 Conditional stepwise random-effects selection guided by the conditional AIC — the greedy
-controller of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction
-(M4 §4.1–§4.2).
+controller of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction.
 
 Starting from the fitted model `m`, each step enumerates the random-effects neighbours one
 direction *smaller* ([`backwardcandidates`](@ref), backward) or *larger* ([`forwardcandidates`](@ref),
@@ -499,13 +498,12 @@ end
              method=:auto, nboot=nothing, rng=Random.default_rng()) -> StepcaicResult
 
 Conditional stepwise random-effects selection for a non-Gaussian `GeneralizedLinearMixedModel` —
-the GLMM branch of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction
-(M4 §4.1–§4.2).
+the GLMM branch of `cAIC4`'s `stepcAIC`, in the **backward**, **forward**, or **both** direction.
 
 Identical in structure to the [`LinearMixedModel`](@ref stepcaic) method: each step enumerates the
 random-effects neighbours one direction *smaller* ([`backwardcandidates`](@ref)) or *larger*
 ([`forwardcandidates`](@ref)), rebuilds and refits each over `data` with the model's GLM
-**distribution family**, and scores it with [`caic`](@ref)'s GLMM path (the M3 bias correction).
+**distribution family**, and scores it with [`caic`](@ref)'s GLMM path (the GLMM bias correction).
 The minimum-cAIC neighbour is accepted while it does not increase the cAIC (the `≤` rule);
 `direction = :both` starts forward and alternates; a backward search bottoms out at the `glm`
 terminal.

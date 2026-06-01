@@ -8,10 +8,9 @@ in isolation, and every kernel is generic over `T <: AbstractFloat`.
 Each kernel computes its quantity via the *stable* formulation (log-space, Cholesky-based
 solves, traces without materialising products, no explicit inverse and no `det` of a
 large/near-singular matrix) and is validated against the *naive* reference on synthetic
-inputs at the Level-1 tolerance. The mathematical identities are recorded in
-`docs/math/0001-numerics-primitives.md`.
+inputs at tight tolerance.
 
-These kernels are consumed by `loglik`, the Level-1 df port, and the scoring spine; they
+These kernels are consumed by `loglik`, the df routines, and the scoring spine; they
 are internal helpers and are not part of the public `ConditionalAIC` export surface.
 """
 module Numerics
@@ -80,7 +79,7 @@ factor `A = L Lᵀ` via
 in log-space and **never** as `log(det(A))` — `logdet` on a Cholesky/triangular factor,
 never `det` of a large or near-singular matrix. The
 factor is obtained with `cholesky(Symmetric(A))`; pass a `Cholesky` directly to reuse
-an existing factor without refactorising (§9).
+an existing factor without refactorising.
 
 # Arguments
 - `A`: a square, symmetric positive-definite matrix (its upper triangle is used), or
@@ -131,7 +130,7 @@ x^{\\mathsf T} A^{-1} x = \\lVert L^{-1} x \\rVert^2,
 
 where `L⁻¹ x` is the triangular solve `L \\ x`. The result is a sum of squares, hence
 `≥ 0` for real `x`. Pass a `Cholesky` directly to reuse an existing factor without
-refactorising (§9).
+refactorising.
 
 # Arguments
 - `A`: a square, symmetric positive-definite matrix (its upper triangle is used), or

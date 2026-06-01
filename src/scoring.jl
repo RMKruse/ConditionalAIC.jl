@@ -23,9 +23,8 @@ Score a fitted Gaussian linear mixed model by its **conditional AIC**
 the analogue of `cAIC4`'s `cAIC`. The conditional log-likelihood `ℓ_cond` is the Gaussian
 density of `y` about the conditional fitted mean `ŷ = X β̂ + Z b̂`
 ([`condloglik`](@ref ConditionalAIC.Loglik.condloglik)); `ρ` is the bias-corrected effective degrees
-of freedom, computed by the selected `method`. The mathematics is pinned in
-`docs/math/0002-gaussian-bias-correction.md` (Greven–Kneib correction) and
-`0003-conditional-loglik.md` (the log-likelihood).
+of freedom, computed by the selected `method`. The mathematics follows the Greven–Kneib
+correction for the bias term and the standard conditional log-likelihood.
 
 The computation is performed on the fit *as given*, dispatching on `m.optsum.REML` (no
 force-refit).
@@ -210,7 +209,7 @@ conditional response distribution `f(μ̂)` (Poisson: [`condloglik_poisson`](@re
 ConditionalAIC.Loglik.condloglik_poisson); Bernoulli: [`condloglik_bernoulli`](@ref
 ConditionalAIC.Loglik.condloglik_bernoulli); multi-trial Binomial: [`condloglik_binomial`](@ref
 ConditionalAIC.Loglik.condloglik_binomial), which deviates from `cAIC4`'s defective binomial
-`getcondLL`). The effective df `ρ` is estimated by the method
+conditional log-likelihood). The effective df `ρ` is estimated by the method
 selected by `method`:
 
 - **`:auto`** (the default) dispatches by family:
@@ -229,8 +228,6 @@ the GLMM collapses to a plain GLM: `ρ = rank(X)` is returned directly with no r
 mirroring `cAIC4`'s `deleteZeroComponents → zeroLessModel\$rank` in both
 `biasCorrectionPoisson` and `biasCorrectionBernoulli`. The `method` kwarg has no effect
 on this path.
-
-The estimand and algorithm are pinned in `docs/math/0006-glmm-bias-correction.md`.
 
 # Arguments
 - `m`: a fitted `GeneralizedLinearMixedModel`.
@@ -411,12 +408,12 @@ estimated dispersion/σ²). No Greven–Kneib / Steinian / bootstrap bias correc
 the terminal is a deterministic closed form — so the result carries `method = :terminal` and
 `bsource = :na`, and `reducedmodel = nothing` / `refit = false` (the terminal is never singular).
 
-Supported terminals mirror M2/M3: the Gaussian `lm` (σ̂ the MLE rescaling
+Supported terminals mirror the LMM/GLMM paths: the Gaussian `lm` (σ̂ the MLE rescaling
 `summary(·)\$sigma·√((n−p)/n)`, i.e. `√(RSS/n)`), and the Poisson / Bernoulli / multi-trial
 Binomial `glm`. The Binomial branch reuses [`condloglik_binomial`](@ref
 ConditionalAIC.Loglik.condloglik_binomial) (the corrected density, deviating from `cAIC4`'s defective
-multi-trial `getcondLL`); for the Bernoulli case it reduces to and matches
-`cAIC4` exactly. The estimand is pinned in `docs/math/0008-stepcaic-search.md §0`.
+multi-trial conditional log-likelihood); for the Bernoulli case it reduces to and matches
+`cAIC4` exactly.
 
 # Arguments
 - `m`: a fitted `GLM.jl` `lm`/`glm` model (a `TableRegressionModel`).

@@ -5,17 +5,15 @@ Build the Gaussian-LMM bias-correction component set ([`ConditionalAIC.DofLMM.Ga
 from the raw quantities extracted from a fitted `LinearMixedModel` — the `ConditionalAIC.jl` analogue
 of `cAIC4`'s `getModelComponents.merMod`.
 
-This module performs the **construction** (the math of `docs/math/0002-gaussian-bias-correction.md`
-§3 and §6); it touches **no** `MixedModels` object — only the dense arrays the quarantine
-module [`ConditionalAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`, the per-reterm `Z`/`λ` blocks,
-and the `θ`-parametrisation map). It is therefore the fit-dependent bridge at
-**Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref ConditionalAIC.caic), not
-in Level-1 isolation.
+This module performs the **construction**; it touches **no** `MixedModels` object — only the
+dense arrays the quarantine module [`ConditionalAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`,
+the per-reterm `Z`/`λ` blocks, and the `θ`-parametrisation map). It is the fit-dependent bridge,
+exercised end-to-end through the assembled [`caic`](@ref ConditionalAIC.caic).
 
 Every linear solve goes through a Cholesky factorisation; no explicit inverse and no `det`
 is formed. The scaled inverse marginal variance `V₀⁻¹` is built from the
-Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`
-(`docs/math/0002` §3), and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
+Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`,
+and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
 """
 module Components
 
@@ -29,7 +27,7 @@ using ..DofLMM: GaussianComponents
 Assemble the [`GaussianComponents`](@ref) of a fitted Gaussian LMM from its extracted
 pieces. `X` is the `n×p` fixed-effects design, `y` the response, `μ = ŷ` the conditional
 fitted mean, `Zblocks`/`λblocks` the per-reterm dense `Z` and `λ` blocks, and `parmap` the
-`θ → (reterm, row, col)` map (`docs/math/0002` §3, §6). `isREML` selects the objective the
+`θ → (reterm, row, col)` map. `isREML` selects the objective the
 downstream bias correction uses.
 
 Builds, all via Cholesky solves (no explicit inverse):
