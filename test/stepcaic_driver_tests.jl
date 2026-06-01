@@ -156,7 +156,7 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic
+    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, _savedkey
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -197,13 +197,21 @@ end
     incumbent = RESpec([
         REGroup(:batch, ["(Intercept)"], true), REGroup(:cask, ["(Intercept)"], true)
     ])
+    # The `keep` re-add reconstitutes the incumbent as `[cask, batch]` — canon-equal to the
+    # incumbent but with the groups REORDERED. The drop-original step must remove it on the
+    # canonical term-multiset (`_savedkey`), not an order-sensitive `RESpec ==`, which would
+    # miss the reordering and leave a redundant self-rescore candidate. So the sole scored
+    # candidate is the `cask`-drop.
+    @test length(res.path[1].candidates) == 1
+
     # The keep floor held at EVERY step: every scored candidate keeps a `batch` intercept term,
     # none is the `lm` terminal (`spec === nothing`), and none is the unchanged incumbent itself
-    # (mergeChanges drop-original).
+    # (mergeChanges drop-original — compared canonically, regardless of group/direction order).
+    incumbentkey = _savedkey(incumbent)
     for rec in res.path
         for cand in rec.candidates
             @test cand.spec !== nothing
-            @test cand.spec != incumbent
+            @test _savedkey(cand.spec) != incumbentkey
             @test any(
                 g -> g.grouping === :batch && "(Intercept)" in g.directions,
                 cand.spec.groups,
@@ -661,9 +669,8 @@ end
     )
 
     # savedmodels = 0 keeps all distinct scored models; the rest are a plain backward run.
-    opts(skip) = StepcaicOptions(
-        :backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false
-    )
+    opts(skip) =
+        StepcaicOptions(:backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false)
 
     noskip = _runstepcaic(
         Float64, m, score, tainted_refit, terminalfit, gencands, opts(false); keep=nothing

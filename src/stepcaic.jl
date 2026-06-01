@@ -448,8 +448,14 @@ function _runstepcaic(
         end
 
         # `mergeChanges` drop-original: discard every candidate equal to the current model before
-        # scoring (the keep re-add / a no-op enlargement can reconstitute the unchanged incumbent).
-        cands = RESpec[c for c in cands if c != state.cur_spec]
+        # scoring (the backward keep re-add / a no-op enlargement can reconstitute the unchanged
+        # incumbent). Equality is the canonical term-multiset (`_savedkey`/`_canonkey`,
+        # docs/math/0008 §2.1) — R's drop-original compares `lapply(cnms, sort)`, the forward
+        # enumerator (`:554`) already drops on this key, and `savedmodels` keys models on it. An
+        # order-sensitive `RESpec ==` would miss a reconstitution whose groups/directions come back
+        # reordered (`_backwardstep` appends the reduced term last; `_checkres` sorts directions).
+        curkey = _savedkey(state.cur_spec)
+        cands = RESpec[c for c in cands if _savedkey(c) != curkey]
         if isempty(cands)
             # `minCAIC == Inf` (branch A): flip in `both`, else stop keeping the incumbent.
             if state.dirwasboth
