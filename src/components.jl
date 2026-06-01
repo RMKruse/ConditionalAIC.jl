@@ -14,6 +14,11 @@ Every linear solve goes through a Cholesky factorisation; no explicit inverse an
 is formed. The scaled inverse marginal variance `V₀⁻¹` is built from the
 Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`,
 and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
+
+The resulting `V₀⁻¹`, `A`, and per-component `Wⱼ` are dense `n×n` (`O(n²)` storage,
+`O(n³)` work) — the accepted, faithful-to-`cAIC4` `getModelComponents.merMod` layout that
+keeps the bias correction parametrisation-neutral and Level-1-isolable, not a missed
+optimisation; see [ADR-0003](../docs/adr/0003-level1-isolation-boundary.md) addendum.
 """
 module Components
 
