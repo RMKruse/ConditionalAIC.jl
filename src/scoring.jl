@@ -96,54 +96,29 @@ function caic(
     ndraws = resolved === :bootstrap ? (nboot !== nothing ? nboot : 500) : 0
     actual_bsource = resolved === :bootstrap ? :na : hessian
 
-    # ── singular fit: drop the boundary components and score the reduced refit ───────────
-    # A variance component estimated on the boundary makes the bias-correction spine
-    # degenerate (a nonsensical, even negative, ρ). Mirroring `cAIC4`'s drop-and-refit
-    # (`biasCorrectionGaussian` → `deleteZeroComponents`), the boundary directions are
-    # removed and the cAIC is computed on the reduced model. The reduction cascades — a
-    # reduced refit may itself be singular — until a non-singular model is reached.
-    if MMInternals.issingular(m)
-        mr = m
-        while MMInternals.issingular(mr)
-            next = MMInternals.reduceboundary(mr)
-            # All random-effect directions on the boundary → no random-effects model remains.
-            # Mirror `cAIC4`'s `lm` branch: score the fixed-effects-only fit. At b̂ = 0 the
-            # conditional mean is ŷ = Xβ̂ (so `condloglik` on the original fit is exactly
-            # `cAIC4`'s `getcondLL(original)`), and ρ = p + sigmapenalty (rank of the fixed
-            # effects plus the estimated σ²). No reduced model is carried (`refit = false`).
-            if next === nothing
-                p = size(MMInternals.fixedeffects(m), 2)
-                ρ = T(p + sigmapenalty)
-                ℓ = Loglik.condloglik(
-                    MMInternals.responsevec(m),
-                    MMInternals.conditionalmean(m),
-                    MMInternals.sigmahat(m),
-                )
-                return CAICResult{T,LinearMixedModel{T}}(
-                    -2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, actual_bsource
-                )
-            end
-            mr = next
-        end
-        ρ, ℓ = if resolved === :bootstrap
-            _bootstrap(mr, ndraws, sigmapenalty, rng)
+    # Score the fit, dropping boundary components and cascading the reduced refit until
+    # non-singular (`_score_with_reduction`). A variance component estimated on the boundary
+    # makes the bias-correction spine degenerate (a nonsensical, even negative, ρ), so this
+    # mirrors `cAIC4`'s drop-and-refit (`biasCorrectionGaussian` → `deleteZeroComponents`). The
+    # Gaussian scoring kernel is the bootstrap or steinian spine. The full-collapse kernel (no
+    # random-effects model remains) is `cAIC4`'s `lm` branch: ρ = p + sigmapenalty (fixed-effects
+    # rank plus the estimated σ²) and the conditional log-likelihood of the ORIGINAL fit — at
+    # b̂ = 0 the conditional mean is ŷ = Xβ̂, so `condloglik` on `m` is exactly `getcondLL(original)`.
+    score(model) =
+        if resolved === :bootstrap
+            _bootstrap(model, ndraws, sigmapenalty, rng)
         else
-            _steinian(mr, sigmapenalty, hessian)
+            _steinian(model, sigmapenalty, hessian)
         end
-        return CAICResult{T,LinearMixedModel{T}}(
-            -2ℓ + 2ρ, ρ, ℓ, mr, true, resolved, actual_bsource
-        )
-    end
-
-    # ── non-singular fit: score it as given ──────────────────────────────────────────────
-    ρ, ℓ = if resolved === :bootstrap
-        _bootstrap(m, ndraws, sigmapenalty, rng)
-    else
-        _steinian(m, sigmapenalty, hessian)
-    end
-    return CAICResult{T,LinearMixedModel{T}}(
-        -2ℓ + 2ρ, ρ, ℓ, nothing, false, resolved, actual_bsource
+    collapse(_) = (
+        T(size(MMInternals.fixedeffects(m), 2) + sigmapenalty),
+        Loglik.condloglik(
+            MMInternals.responsevec(m),
+            MMInternals.conditionalmean(m),
+            MMInternals.sigmahat(m),
+        ),
     )
+    return _score_with_reduction(m, resolved, actual_bsource, score, collapse)
 end
 
 # The bootstrap Gaussian scoring spine: draw `ndraws` parametric bootstrap samples from the
@@ -195,6 +170,42 @@ function _steinian(m::LinearMixedModel{T}, sigmapenalty::Integer, hessian::Symbo
     return ρ, ℓ
 end
 
+# Shared scoring spine for both `caic` mixed-model methods. Score the fit; but if it sits on the
+# variance-parameter boundary, drop the boundary directions and cascade the reduced refit until a
+# non-singular model is reached, scoring THAT (a singular fit's bias correction is degenerate) —
+# `cAIC4`'s `deleteZeroComponents` recursion. When the reduction fully collapses (no random-effect
+# direction survives), the model is fixed-effects only (`cAIC4`'s `(g)lm` branch); the `collapse`
+# kernel supplies that (ρ, ℓ). The two families differ only in the injected kernels:
+#   • `score(model)    -> (ρ, ℓ)` — the family's bias-corrected df + conditional log-likelihood;
+#   • `collapse(model) -> (ρ, ℓ)` — the fixed-effects-only fallback. The LMM kernel reads the
+#     ORIGINAL fit (at b̂ = 0, ŷ = Xβ̂); the GLMM kernel reads the collapsing model, so a
+#     fully-singular input collapses on the first step — subsuming `cAIC4`'s full-singularity
+#     shortcut (`deleteZeroComponents → zeroLessModel$rank`).
+# `method`/`bsource` are the provenance recorded in every `CAICResult`. The result model type is
+# `typeof(m)` throughout — a reduced refit `mr` has the same type as `m` (the `reducedmodel` slot).
+# `score`/`collapse` are injected as closures, so the closure types `F`/`G` keep the spine
+# type-stable through a function barrier.
+function _score_with_reduction(
+    m::MM, method::Symbol, bsource::Symbol, score::F, collapse::G
+) where {T,MM<:MixedModel{T},F,G}
+    R = CAICResult{T,MM}
+    if MMInternals.issingular(m)
+        mr = m
+        while MMInternals.issingular(mr)
+            next = MMInternals.reduceboundary(mr)
+            if next === nothing
+                ρ, ℓ = collapse(mr)
+                return R(-2ℓ + 2ρ, ρ, ℓ, nothing, false, method, bsource)
+            end
+            mr = next
+        end
+        ρ, ℓ = score(mr)
+        return R(-2ℓ + 2ρ, ρ, ℓ, mr, true, method, bsource)
+    end
+    ρ, ℓ = score(m)
+    return R(-2ℓ + 2ρ, ρ, ℓ, nothing, false, method, bsource)
+end
+
 """
     caic(m::GeneralizedLinearMixedModel; method=:auto, nboot=nothing, rng=default_rng()) -> CAICResult
 
@@ -238,8 +249,10 @@ on this path.
 
 # Returns
 - A [`CAICResult`](@ref) carrying the cAIC, ρ (`dof`), the conditional log-likelihood,
-  and provenance (`method` as given; `bsource = :na` — GLMM paths carry no Hessian
-  B-source).
+  and provenance: `method` is the **resolved** estimator — `:auto` resolves to `:steinian`
+  (the shared label for the family-dispatched analytic correction: Poisson Chen–Stein
+  influence / Bernoulli Efron Steinian), and `:bootstrap` is recorded verbatim — and
+  `bsource = :na` (GLMM paths carry no Hessian B-source).
 
 # Throws
 - `ArgumentError` for unsupported `method`, `nboot` misuse, or an unsupported family
@@ -275,48 +288,24 @@ function caic(
         nboot > 0 || throw(ArgumentError("nboot must be positive; got $(nboot)"))
     end
 
-    # Full-singularity: every θ = 0 → GLMM collapses to plain GLM; ρ = rank(X), no σ-penalty.
-    # No refit (b̂ = 0 ⇒ μ̂ = Xβ̂ already), mirroring `cAIC4`'s `deleteZeroComponents → glm`.
-    if MMInternals.glmmisfullysingular(m)
-        ℓ = _glmm_condll(m)
-        ρ = T(MMInternals.glmmfixedefrank(m))
-        return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
-            -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
-        )
-    end
+    # Resolve `:auto` to the method actually run, so the recorded provenance never carries the
+    # request-level `:auto` (mirrors the LMM path's `:auto → :steinian`). The family-dispatched
+    # analytic path — Poisson Chen–Stein influence df and Bernoulli Efron Steinian df — are both
+    # Stein-type covariance-penalty corrections, recorded under the shared `:steinian` umbrella
+    # (the analytic-correction class, as opposed to `:bootstrap`); `_glmm_score_df` still selects
+    # the family-specific estimator. The bootstrap request is recorded verbatim.
+    resolved = method === :auto ? :steinian : method
 
-    # Partial-singularity: SOME directions on the boundary. Drop them, refit the reduced GLMM,
-    # and cascade — a reduced refit may itself be singular — until a non-singular model is
-    # reached; score THAT (the singular fit's df is degenerate). Mirrors the LMM cascade and
-    # `cAIC4`'s `deleteZeroComponents` recursion. If the reduction fully collapses (no direction
-    # survives), fall back to the rank(X) plain-GLM df on the collapsed fit (its b̂ = 0 ⇒
-    # μ̂ = Xβ̂), with no reduced model carried.
-    if MMInternals.issingular(m)
-        mr = m
-        while MMInternals.issingular(mr)
-            next = MMInternals.reduceboundary(mr)
-            if next === nothing
-                ℓ = _glmm_condll(mr)
-                ρ = T(MMInternals.glmmfixedefrank(mr))
-                return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
-                    -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
-                )
-            end
-            mr = next
-        end
-        ℓ = _glmm_condll(mr)
-        ρ = _glmm_score_df(mr, method, nboot, rng)
-        return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
-            -2ℓ + 2ρ, ρ, ℓ, mr, true, method, :na
-        )
-    end
-
-    # Non-singular: score it as given.
-    ℓ = _glmm_condll(m)
-    ρ = _glmm_score_df(m, method, nboot, rng)
-    return CAICResult{T,GeneralizedLinearMixedModel{T,D}}(
-        -2ℓ + 2ρ, ρ, ℓ, nothing, false, method, :na
-    )
+    # Score the fit, dropping boundary components and cascading the reduced refit until
+    # non-singular (`_score_with_reduction`) — the singular fit's df is degenerate. Mirrors the
+    # LMM cascade and `cAIC4`'s `deleteZeroComponents` recursion. The full-collapse kernel (every
+    # direction on the boundary → plain GLM, the `deleteZeroComponents → glm` analogue) returns
+    # ρ = rank(X) (no σ-penalty) and the conditional log-likelihood at b̂ = 0 (μ̂ = Xβ̂), reading the
+    # collapsing model: a fully-singular input collapses on the first cascade step, so this
+    # subsumes `cAIC4`'s `deleteZeroComponents → zeroLessModel$rank` full-singularity shortcut.
+    score(model) = (_glmm_score_df(model, resolved, nboot, rng), _glmm_condll(model))
+    collapse(model) = (T(MMInternals.glmmfixedefrank(model)), _glmm_condll(model))
+    return _score_with_reduction(m, resolved, :na, score, collapse)
 end
 
 # Conditional log-likelihood of a (possibly reduced) GLMM fit, via family dispatch.
@@ -371,7 +360,8 @@ function _condll_by_family(d, y, μ, wts)
     )
 end
 
-# Family dispatch for the GLMM df estimator (method = :auto path).
+# Family dispatch for the GLMM analytic df estimator (the resolved `:steinian` path — the
+# family-dispatched Stein-type correction `:auto` resolves to).
 _glmm_df_auto(m::GeneralizedLinearMixedModel, ::Poisson) = DofGLMM.dof_glmm_poisson(m)
 _glmm_df_auto(m::GeneralizedLinearMixedModel, ::Bernoulli) = DofGLMM.dof_glmm_bernoulli(m)
 function _glmm_df_auto(::GeneralizedLinearMixedModel, d)
