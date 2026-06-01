@@ -23,7 +23,7 @@
     # Tracer bullet (issue #31): caic must no longer throw for a non-singular Poisson GLMM.
     # The cAIC identity −2ℓ + 2ρ must hold and all provenance fields must be correct.
     using MixedModels
-    using cAIC
+    using ConditionalAIC
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)
@@ -48,8 +48,8 @@ end
     # Assembly wiring test: caic must delegate df to DofGLMM.dof_glmm_poisson (Chen-Stein)
     # and the log-lik to Loglik.condloglik_poisson.
     using MixedModels
-    using cAIC
-    using cAIC: DofGLMM, Loglik, MMInternals
+    using ConditionalAIC
+    using ConditionalAIC: DofGLMM, Loglik, MMInternals
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)
@@ -73,7 +73,7 @@ end
 ] begin
     # caic must no longer throw for a non-singular Bernoulli GLMM.
     using MixedModels
-    using cAIC
+    using ConditionalAIC
 
     y = Float64[
         0,
@@ -130,8 +130,8 @@ end
 ] begin
     # Assembly wiring test: caic must delegate df to DofGLMM.dof_glmm_bernoulli (Efron).
     using MixedModels
-    using cAIC
-    using cAIC: DofGLMM, Loglik, MMInternals
+    using ConditionalAIC
+    using ConditionalAIC: DofGLMM, Loglik, MMInternals
 
     y = Float64[
         0,
@@ -190,7 +190,7 @@ end
     # nboot=20 for speed; correctness of bootstrap df is tested in dof_glmm_tests.jl.
     using MixedModels
     using Random: Xoshiro
-    using cAIC
+    using ConditionalAIC
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)
@@ -216,7 +216,7 @@ end
     # only through DofGLMM.dof_glmm_bootstrap. nboot=20 for speed.
     using MixedModels
     using Random: Xoshiro
-    using cAIC
+    using ConditionalAIC
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -243,7 +243,7 @@ end
 
 @testitem "caic GLMM raises ArgumentError for unsupported method" tags = [:glmm, :level2] begin
     using MixedModels
-    using cAIC
+    using ConditionalAIC
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)
@@ -256,7 +256,7 @@ end
 
 @testitem "caic GLMM raises ArgumentError for nboot misuse" tags = [:glmm, :level2] begin
     using MixedModels
-    using cAIC
+    using ConditionalAIC
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)
@@ -273,7 +273,7 @@ end
     # Binomial GLMM (multiple-trial) has no analytic df estimator for method=:auto;
     # the user must pass method=:bootstrap explicitly.
     using MixedModels
-    using cAIC
+    using ConditionalAIC
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -297,7 +297,7 @@ end
     # Type instability in the GLMM scoring path is a defect (CLAUDE §4); @inferred asserts
     # the compiler resolves caic to a concrete CAICResult{Float64,…} with no Any/Union.
     using MixedModels
-    using cAIC: caic, CAICResult
+    using ConditionalAIC: caic, CAICResult
 
     y = Float64[1, 1, 2, 1, 8, 9, 8, 9, 3, 4, 3, 4, 5, 6, 5, 6, 1, 2, 1, 1]
     g = repeat(1:5, inner=4)

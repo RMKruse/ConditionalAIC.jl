@@ -21,12 +21,12 @@
     #   log(1!) = 0, log(2!) = log(2) ≈ 0.6931, log(3!) = log(6) ≈ 1.7918
     #   = [0 - 1 - 0] + [2·log(2) - 2 - log(2)] + [3·log(3) - 3 - log(6)]
     #   ≈ -1 - 1.3069 - 1.4959 = -3.8028
-    using cAIC
+    using ConditionalAIC
     _logfact(k) = sum(log(j) for j in 2:k; init=0.0)  # log(k!) via log-sum (no special functions)
     y = [1.0, 2.0, 3.0]
     μ = [1.0, 2.0, 3.0]
     ref = sum(y[i] * log(μ[i]) - μ[i] - _logfact(round(Int, y[i])) for i in eachindex(y))
-    @test cAIC.Loglik.condloglik_poisson(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+    @test ConditionalAIC.Loglik.condloglik_poisson(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
 end
 
 @testitem "condloglik_poisson: zero count (y_i=0) contributes zero log term" tags = [
@@ -34,31 +34,33 @@ end
 ] begin
     # y_i = 0 → y_i·log(μ_i) = 0 (xlogy convention, not NaN), and log(0!) = 0.
     # So the zero-count term is -μ_i only.
-    using cAIC
+    using ConditionalAIC
     _logfact(k) = sum(log(j) for j in 2:k; init=0.0)
     y = [0.0, 1.0]
     μ = [2.0, 2.0]
     ref = sum(y[i] * log(μ[i]) - μ[i] - _logfact(round(Int, y[i])) for i in eachindex(y))
-    @test cAIC.Loglik.condloglik_poisson(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
-    @test isfinite(cAIC.Loglik.condloglik_poisson(y, μ))
+    @test ConditionalAIC.Loglik.condloglik_poisson(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+    @test isfinite(ConditionalAIC.Loglik.condloglik_poisson(y, μ))
 end
 
 @testitem "condloglik_poisson is type-stable and generic over T" tags = [:glmm, :loglik] begin
-    using cAIC
+    using ConditionalAIC
     y = [1.0, 2.0]
     μ = [1.5, 2.5]
-    @test (@inferred cAIC.Loglik.condloglik_poisson(y, μ)) isa Float64
+    @test (@inferred ConditionalAIC.Loglik.condloglik_poisson(y, μ)) isa Float64
     y32, μ32 = Float32[1.0, 2.0], Float32[1.5, 2.5]
-    @test (@inferred cAIC.Loglik.condloglik_poisson(y32, μ32)) isa Float32
+    @test (@inferred ConditionalAIC.Loglik.condloglik_poisson(y32, μ32)) isa Float32
 end
 
 @testitem "condloglik_poisson rejects non-positive μ and mismatched lengths" tags = [
     :glmm, :loglik
 ] begin
-    using cAIC
-    @test_throws DomainError cAIC.Loglik.condloglik_poisson([1.0], [0.0])
-    @test_throws DomainError cAIC.Loglik.condloglik_poisson([1.0], [-1.0])
-    @test_throws DimensionMismatch cAIC.Loglik.condloglik_poisson([1.0, 2.0], [1.0])
+    using ConditionalAIC
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_poisson([1.0], [0.0])
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_poisson([1.0], [-1.0])
+    @test_throws DimensionMismatch ConditionalAIC.Loglik.condloglik_poisson(
+        [1.0, 2.0], [1.0]
+    )
 end
 
 # ── Level-1: Bernoulli conditional log-likelihood ────────────────────────────
@@ -67,43 +69,45 @@ end
     :glmm, :loglik
 ] begin
     # ℓ_cond^Bern = Σᵢ [y_i log(μ_i) + (1-y_i) log(1-μ_i)]
-    using cAIC
+    using ConditionalAIC
     y = [1.0, 0.0, 1.0]
     μ = [0.8, 0.3, 0.6]
     ref = sum(y[i] * log(μ[i]) + (1 - y[i]) * log(1 - μ[i]) for i in eachindex(y))
-    @test cAIC.Loglik.condloglik_bernoulli(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+    @test ConditionalAIC.Loglik.condloglik_bernoulli(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
 end
 
 @testitem "condloglik_bernoulli handles boundary labels (y=0 and y=1)" tags = [
     :glmm, :loglik
 ] begin
     # y=0 → only the (1-y)·log(1-μ) term; y=1 → only y·log(μ). Both handled without NaN.
-    using cAIC
+    using ConditionalAIC
     y = [0.0, 1.0]
     μ = [0.3, 0.7]
     ref = log(1 - μ[1]) + log(μ[2])
-    @test cAIC.Loglik.condloglik_bernoulli(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
-    @test isfinite(cAIC.Loglik.condloglik_bernoulli(y, μ))
+    @test ConditionalAIC.Loglik.condloglik_bernoulli(y, μ) ≈ ref rtol = 1e-6 atol = 1e-10
+    @test isfinite(ConditionalAIC.Loglik.condloglik_bernoulli(y, μ))
 end
 
 @testitem "condloglik_bernoulli is type-stable and generic over T" tags = [:glmm, :loglik] begin
-    using cAIC
+    using ConditionalAIC
     y = [1.0, 0.0]
     μ = [0.7, 0.4]
-    @test (@inferred cAIC.Loglik.condloglik_bernoulli(y, μ)) isa Float64
+    @test (@inferred ConditionalAIC.Loglik.condloglik_bernoulli(y, μ)) isa Float64
     y32, μ32 = Float32[1.0, 0.0], Float32[0.7, 0.4]
-    @test (@inferred cAIC.Loglik.condloglik_bernoulli(y32, μ32)) isa Float32
+    @test (@inferred ConditionalAIC.Loglik.condloglik_bernoulli(y32, μ32)) isa Float32
 end
 
 @testitem "condloglik_bernoulli rejects μ outside (0,1) and mismatched lengths" tags = [
     :glmm, :loglik
 ] begin
-    using cAIC
-    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli([1.0], [0.0])
-    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli([0.0], [1.0])
-    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli([1.0], [-0.1])
-    @test_throws DomainError cAIC.Loglik.condloglik_bernoulli([1.0], [1.1])
-    @test_throws DimensionMismatch cAIC.Loglik.condloglik_bernoulli([1.0, 0.0], [0.5])
+    using ConditionalAIC
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_bernoulli([1.0], [0.0])
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_bernoulli([0.0], [1.0])
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_bernoulli([1.0], [-0.1])
+    @test_throws DomainError ConditionalAIC.Loglik.condloglik_bernoulli([1.0], [1.1])
+    @test_throws DimensionMismatch ConditionalAIC.Loglik.condloglik_bernoulli(
+        [1.0, 0.0], [0.5]
+    )
 end
 
 # ── Level-2: full-singularity GLMM scoring ───────────────────────────────────
@@ -114,7 +118,7 @@ end
     # Alternating [2,4] within each group → all group means = 3.0 → no between-group variation
     # → θ=0 → fully singular. cAIC4's `biasCorrectionPoisson.R:14–16` fallback: return
     # rank(X), no +1 for σ (canonical-link Poisson has fixed dispersion).
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     y = repeat([2, 4], 10)    # 20 obs, all group means = 3 → zero between-group variance
     g = repeat(1:10, inner=2) # 10 groups of 2, each group has y=[2,4]
@@ -135,7 +139,7 @@ end
 @testitem "caic on fully-singular GLMM: type is CAICResult{Float64, GeneralizedLinearMixedModel}" tags = [
     :glmm, :level2
 ] begin
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     y = repeat([2, 4], 10)
     g = repeat(1:10, inner=2)
@@ -157,7 +161,7 @@ end
     # (neither Poisson Chen-Stein nor Bernoulli Efron applies). caic must throw ArgumentError
     # directing the user to method=:bootstrap. This is consistent with cAIC4's own scope:
     # biasCorrectionPoisson and biasCorrectionBernoulli do not handle multi-trial binomial.
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -182,7 +186,7 @@ end
     # log-likelihood (condloglik_binomial) — the path that used to throw for Binomial.
     # `fast=true` (PIRLS-only) reaches the θ=0 boundary here; the default nAGQ optimiser is
     # roundoff-limited on this degenerate design and stalls at the θ=1 init.
-    using cAIC
+    using ConditionalAIC
     using MixedModels
     using Random: Xoshiro
     incid = repeat([1, 3], 10)     # each group: proportions 1/4 and 3/4

@@ -1,0 +1,84 @@
+"""
+    ConditionalAIC
+
+Conditional Akaike Information Criterion and conditional model selection for
+mixed-effects models fitted with [`MixedModels.jl`](https://github.com/JuliaStats/MixedModels.jl)
+— a re-platforming of R's `cAIC4` onto `LinearMixedModel` / `GeneralizedLinearMixedModel`.
+
+[`caic`](@ref) scores a fitted model by its conditional AIC: a Gaussian `LinearMixedModel`
+via the analytic Greven–Kneib bias correction, a `GeneralizedLinearMixedModel`
+via Poisson Chen–Stein / Bernoulli Efron Steinian / conditional-bootstrap df, or — as the
+terminal node a backward `stepcaic` search reaches when the last random-effects term is dropped —
+a plain `GLM.jl` `lm`/`glm` fit scored directly (`df = rank + 1`). All assemble into
+a [`CAICResult`](@ref). [`anocaic`](@ref) ranks a user-supplied set of models by cAIC,
+returning an [`AnocaicTable`](@ref). [`stepcaic`](@ref) runs conditional stepwise random-effects
+selection (backward direction), returning a [`StepcaicResult`](@ref). All access to
+`MixedModels.jl` internals is quarantined in the [`ConditionalAIC.MMInternals`](@ref) submodule.
+"""
+module ConditionalAIC
+
+using MixedModels:
+    MixedModel,
+    LinearMixedModel,
+    GeneralizedLinearMixedModel,
+    Poisson,
+    Bernoulli,
+    Binomial,
+    fit,
+    fixef,
+    fixefnames,
+    formula,
+    raneftables
+using GLM:
+    GLM,
+    RegressionModel,
+    LinearModel,
+    GeneralizedLinearModel,
+    lm,
+    coef,
+    response,
+    predict,
+    deviance
+# `TableRegressionModel` (the `lm`/`glm` formula-fit wrapper) is not exported by GLM; it lives
+# in StatsModels, reachable through GLM's loaded copy. Aliased here so the terminal-scoring
+# dispatch (`src/scoring.jl`) can name the type without taking a separate StatsModels dependency.
+const TableRegressionModel = GLM.StatsModels.TableRegressionModel
+using Random: AbstractRNG, default_rng, randn
+
+include("numerics.jl")
+include("loglik.jl")
+include("dof_lmm.jl")        # defines DofLMM.GaussianComponents (used by Components)
+include("mm_internals.jl")   # QUARANTINE: the only MixedModels-internals touchpoint
+include("dof_glmm.jl")       # GLMM df routes: Poisson Chen-Stein + Bernoulli Efron (M3)
+include("components.jl")     # fit-extracted arrays → GaussianComponents (uses ..DofLMM)
+include("types.jl")          # CAICResult, AnocaicTable (public result types)
+include("scoring.jl")        # the caic methods (the scoring assembly)
+include("comparison.jl")     # the anocaic method (comparison table, M2.5)
+include("respec.jl")         # RESpec extract/render — the M4 RE-structure representation
+include("stepcaic_candidates.jl")  # backward/forward candidate enumeration (M4 stepwise search)
+include("stepcaic.jl")             # greedy stepwise driver + result types (M4)
+include("weightoptim.jl")    # Zhang-optimal solnp weight optimizer (R-transcription, M4.5)
+include("averaging.jl")      # modelavg — cAIC-weighted model averaging (M4.5)
+
+# ── Public surface ──────────────────────────────────────────────────────────
+# `caic` (M2 scoring) is implemented in `scoring.jl`. `anocaic` (M2.5 comparison) is
+# implemented in `comparison.jl`. `stepcaic` (M4 search) is implemented in `stepcaic.jl`.
+# See CONTEXT.md for the Scoring / Comparison / Search vocabulary.
+
+# Forward declaration so `anocaic` is exportable here; the method and its canonical
+# docstring live in `comparison.jl`.
+function anocaic end
+
+export caic,
+    anocaic,
+    stepcaic,
+    modelavg,
+    getweights,
+    predictma,
+    CAICResult,
+    AnocaicTable,
+    StepcaicResult,
+    ModelAvgResult,
+    WeightResult
+
+end # module ConditionalAIC

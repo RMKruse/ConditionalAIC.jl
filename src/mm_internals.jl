@@ -1,5 +1,5 @@
 """
-    cAIC.MMInternals
+    ConditionalAIC.MMInternals
 
 **Quarantine module — the single, auditable touchpoint for `MixedModels.jl` internals.**
 
@@ -18,12 +18,13 @@ first.
 | Touchpoint        | Kind        | Used by             | Extracted quantity                                       |
 |:------------------|:------------|:--------------------|:---------------------------------------------------------|
 | `m.optsum.REML`   | field       | [`reml`]            | REML flag (`Bool`); which objective was fitted           |
+| `m.optsum.returnvalue` | field  | [`converged`]       | optimizer return code (`Symbol`); non-converged when in the failure modes |
 | `m.sigma`         | property    | [`sigmahat`]        | residual standard deviation σ̂                            |
 | `ranef(m)`        | exported fn | [`bhat`]            | predicted random effects b̂ = λu, per grouping            |
 | `m.X`             | field       | [`fixedeffects`]    | n×p fixed-effects design X                                |
 | `response(m)`     | exported fn | [`responsevec`]     | response vector y                                        |
 | `fitted(m)`       | exported fn | [`conditionalmean`] | conditional fitted mean ŷ = Xβ̂ + Zb̂                      |
-| `leverage(m)`     | exported fn | [`rho0`]            | per-observation hat-matrix diagonal; ρ₀ = its sum (§2)   |
+| `leverage(m)`     | exported fn | [`rho0`]            | per-observation hat-matrix diagonal; ρ₀ = its sum       |
 | `m.reterms`       | field       | [`retermdesigns`], [`reduceboundary`] | the per-grouping `ReMat`s                  |
 | `Matrix(re)`      | constructor | [`retermdesigns`]   | dense random-effects design Z block (n×qₜ) per reterm    |
 | `re.λ`            | field       | [`retermlambdas`], [`reduceboundary`] | relative covariance factor λ block (kₜ×kₜ) |
@@ -57,22 +58,30 @@ first.
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
 | `m.resp.wts`      | field       | [`glmmpriorweights`]| prior weights (binomial denominators nᵢ); empty `T[]` for unweighted (Poisson, Bernoulli) fits |
+| `m.formula.rhs`   | field       | [`reterminfo`], [`fixedterm`] | formula RHS tuple: leading `MatrixTerm` (fixed) + the RE terms (RE-structure read) |
+| `MixedModels.schematize(f, data, contrasts)` | unexported fn | [`reterminfo`] | apply the model schema to a `keep` formula fragment so its `|` bars become RE terms |
+| `m.formula.lhs`   | field       | [`responseterm`]    | formula response term; the `lhs` of the rendered candidate formula             |
+| `RandomEffectsTerm` (`.lhs`/`.rhs`) | type/fields | [`reterminfo`] | a correlated RE term: `.lhs` directions `MatrixTerm`, `.rhs` grouping `CategoricalTerm` |
+| `MixedModels.ZeroCorr` (`.term`) | type/field | [`reterminfo`] | an uncorrelated `zerocorr` term; unwrapped to its inner `RandomEffectsTerm` |
+| `MatrixTerm` (`.terms`), `InterceptTerm{B}`, `CategoricalTerm.sym`, `termvars` | StatsModels types/fns | [`reterminfo`], [`fixedterm`] | RE-direction labels (`"(Intercept)"`/slope names), grouping symbol, fixed-part identification |
 
-**Experimental surface (ADR-0002).** `ForwardDiff.hessian(::LinearMixedModel)` (the
+**Experimental surface.** `ForwardDiff.hessian(::LinearMixedModel)` (the
 `MixedModelsForwardDiffExt` extension, used by [`bhessian`]) is the one touchpoint on
 `MixedModels`' *experimental* AD surface; the docs warn that which parameters are
 differentiated alongside θ may change, which would silently alter B's dimension, so
 [`bhessian`] shape-asserts the `s×s` result against the `=5.5.1` pin. The companion
 `FiniteDiff.finite_difference_hessian(::LinearMixedModel)` extension is **deliberately not
 accessed** — the `:finitediff` source self-drives `FiniteDiff` over the stable
-`objective!`/`setθ!`/`updateL!` trio instead (ADR-0002).
+`objective!`/`setθ!`/`updateL!` trio instead.
 """
 module MMInternals
 
 using LinearAlgebra: Diagonal, LowerTriangular, I
 using MixedModels:
+    MixedModel,
     LinearMixedModel,
     GeneralizedLinearMixedModel,
+    RandomEffectsTerm,
     AbstractReMat,
     ReMat,
     vsize,
@@ -97,6 +106,11 @@ using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
 
+# StatsModels term types/functions (`MatrixTerm`, `InterceptTerm`, `termvars`, the
+# `FormulaTerm` field layout) are the upstream term representation `m.formula` is built
+# from; interpreting them is a quarantine concern (M4 `reterminfo`/`responseterm`/`fixedterm`).
+const SM = MixedModels.StatsModels
+
 # Raised when an internal touchpoint yields a value of an unexpected type/shape —
 # i.e. `MixedModels` has drifted from the pinned version. Failing loud here turns a
 # silent upstream change into a clear error instead of a wrong number downstream.
@@ -119,6 +133,41 @@ function reml(m::LinearMixedModel)
     flag = m.optsum.REML
     flag isa Bool || _drift("m.optsum.REML", Bool, flag)
     return flag
+end
+
+# The optimizer return codes that signal a failed (non-converged) fit, mirroring
+# `MixedModels`' own `_NLOPT_FAILURE_MODES` (the NLopt backend's failure classification). A
+# return value outside this set — `:FTOL_REACHED`, `:XTOL_REACHED`, `:SUCCESS`,
+# `:STOPVAL_REACHED`, the tolerance-reached successes, and the soft `:ROUNDOFF_LIMITED` — is a
+# converged fit. Held locally (not imported from the unexported backend constant) so the
+# convergence test does not reach past the documented touchpoint.
+const _NONCONVERGED_RETURNS = (
+    :FAILURE,
+    :INVALID_ARGS,
+    :OUT_OF_MEMORY,
+    :FORCED_STOP,
+    :MAXEVAL_REACHED,
+    :MAXTIME_REACHED,
+)
+
+"""
+    converged(m::MixedModel) -> Bool
+
+Whether the model's variance-parameter optimization converged (`m.optsum.returnvalue` is not
+one of the optimizer failure codes). The convergence signal `stepcaic`'s `skipnonconverged`
+option (the `cAIC4` `calcNonOptimMod` analogue) tests to exclude a non-converged candidate from
+the comparison.
+
+`lme4` flags non-convergence with a richer gradient/Hessian check (its `optinfo` convergence
+code);
+`MixedModels.jl` exposes only the optimizer return code, so this is the faithful analogue
+available — a documented divergence. Works for both `LinearMixedModel` and
+`GeneralizedLinearMixedModel` (each carries its own `optsum`).
+"""
+function converged(m::MixedModel)
+    ret = m.optsum.returnvalue
+    ret isa Symbol || _drift("m.optsum.returnvalue", Symbol, ret)
+    return !(ret in _NONCONVERGED_RETURNS)
 end
 
 """
@@ -184,8 +233,8 @@ end
     rho0(m::LinearMixedModel{T}) -> T
 
 The naive plug-in effective degrees of freedom `ρ₀ = tr(H₁) = sum(leverage(m))` — the
-trace of the hat matrix `y ↦ ŷ` at the fitted, fixed variance parameters
-(`docs/math/0002` §2). `leverage(m)` returns the per-observation hat-matrix *diagonal*; ρ₀
+trace of the hat matrix `y ↦ ŷ` at the fitted, fixed variance parameters.
+`leverage(m)` returns the per-observation hat-matrix *diagonal*; ρ₀
 is its sum. This is the `MixedModels`-native ρ₀ (computed via triangular solves against the
 fit's Cholesky `L`), used to cross-check the bias correction (`ρ ≥ ρ₀`).
 """
@@ -213,7 +262,7 @@ end
 The relative covariance factor `λ` block (`re.λ`, `kₜ×kₜ` lower-triangular, dense) for each
 reterm. The per-group relative covariance is `λ λᵀ`; together with [`retermdesigns`](@ref)
 and [`parmap`](@ref) it fixes the scaled marginal variance `V₀ = Iₙ + Z λλᵀ Zᵀ` and the
-derivative matrices `Wⱼ` (`docs/math/0002` §3, §6).
+derivative matrices `Wⱼ`.
 """
 function retermlambdas(m::LinearMixedModel{T}) where {T}
     return Matrix{T}[Matrix(re.λ) for re in m.reterms]
@@ -224,7 +273,7 @@ end
 
 The free-covariance-parameter map `m.parmap` — the `lme4` `Lind` analogue. Entry `s` is
 `(t, i, j)`: the `s`-th component `θₛ` occupies position `(i, j)` of reterm `t`'s `λ`
-block. This drives the `Wⱼ` derivative-pattern construction (`docs/math/0002` §6).
+block. This drives the `Wⱼ` derivative-pattern construction.
 """
 function parmap(m::LinearMixedModel)
     pm = m.parmap
@@ -282,9 +331,9 @@ Each surviving reterm is rebuilt **fresh** (reusing the stored grouping `trm`/`r
 the returned model shares no mutable state with `m`. The fixed-effects term and formula
 are reused; refitting uses the reterms and feterm, not the (now stale) formula, so the
 reduced fit matches a native fit of the reduced model. The reduction may itself land on
-the boundary — the caller iterates ([`caic`](@ref) cascades until non-singular).
+the boundary — the caller iterates ([`caic`](@ref ConditionalAIC.caic) cascades until non-singular).
 
-Returns the refitted reduced [`LinearMixedModel`](@ref), or `nothing` when **every**
+Returns the refitted reduced `LinearMixedModel`, or `nothing` when **every**
 random-effect direction is on the boundary (no random-effects model remains — the caller
 falls back to the fixed-effects-only score, mirroring `cAIC4`'s `lm` branch).
 """
@@ -343,17 +392,17 @@ end
 The `s×s` numeric Hessian **B** of the (restricted) profile objective with respect to the
 variance parameters θ, evaluated at the fitted θ̂, on the **deviance scale** (−2·profile
 log-likelihood for ML, the REML criterion for REML) — the scale `cAIC4`'s `analytic = FALSE`
-path consumes (`docs/math/0004` §1, §3). `s = length(m.θ)`. Dispatches on `source`:
+path consumes. `s = length(m.θ)`. Dispatches on `source`:
 
 - `:finitediff` — **self-driven** finite differences over `MixedModels`' *stable*
-  `objective!`/`setθ!`/`updateL!` API (ADR-0002), **not** `MixedModelsFiniteDiffExt`.
+  `objective!`/`setθ!`/`updateL!` API, **not** `MixedModelsFiniteDiffExt`.
   `objective!(m, θ)` mutates `m`, so `FiniteDiff` leaves it parked at its last probe; the
   driver restores θ̂ in a `finally` and **fails loud** if the restoration did not take — a
-  Hessian computed against a silently-mutated fit is a defect (`docs/math/0004` §3b).
+  Hessian computed against a silently-mutated fit is a defect.
 - `:forwarddiff` — rides the **experimental** `MixedModelsForwardDiffExt`
-  (`ForwardDiff.hessian(m)`), the only B-source on experimental surface (ADR-0002). It
-  differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing
-  of `docs/math/0004` §3a; the result type is shape-asserted against the `=5.5.1` pin.
+  (`ForwardDiff.hessian(m)`), the only B-source on experimental surface. It
+  differentiates a *frozen-σ* deviance, so it diverges from `:finitediff` by the σ-freezing;
+  the result type is shape-asserted against the `=5.5.1` pin.
 
 The `s×s` result is shape-asserted: the experimental AD surface may change which parameters
 are differentiated alongside θ, which would silently alter B's dimension — the assertion
@@ -413,7 +462,7 @@ covariance parameters re-estimated from scratch) and return the conditional fitt
 `ŷ* = Xβ̂* + Zb̂*` of the new fit. The REML flag of `m` is preserved so the bootstrap
 objective matches the original.
 
-Used by the `:bootstrap` df path in [`caic`](@ref cAIC.caic): each bootstrap draw refits
+Used by the `:bootstrap` df path in [`caic`](@ref ConditionalAIC.caic): each bootstrap draw refits
 with full θ re-estimation, so the covariance penalty captures the estimation-uncertainty
 correction (not just the naive ρ₀).
 
@@ -449,10 +498,10 @@ Whether **every** random-effect variance direction in the GLMM is on the boundar
 (`λ[d, d] = 0` for all `d` in every reterm of the working LMM `m.LMM`). This is the
 GLMM analogue of `reduceboundary(m.LMM) === nothing` for the Gaussian path: when
 fully singular, the GLMM collapses to a plain GLM and the cAIC df is `rank(X)` with
-no σ-penalty (`docs/math/0006-glmm-bias-correction.md §5`).
+no σ-penalty.
 
 Returns `false` for partial singularity (some but not all directions on the boundary)
-or for a non-singular fit — those cases are handled by the general M3 influence paths
+or for a non-singular fit — those cases are handled by the general GLMM influence paths
 (not yet implemented).
 """
 function glmmisfullysingular(m::GeneralizedLinearMixedModel)
@@ -485,14 +534,11 @@ constructor, whose empty `sqrtwts` would otherwise produce a different working r
 Each surviving reterm is rebuilt **fresh** (via [`_subsetreterm`], `λ` reset to identity), so
 the returned model shares no mutable state with `m`.
 
-The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref)
+The reduced fit may itself land on the boundary — the caller iterates ([`caic`](@ref ConditionalAIC.caic)
 cascades until non-singular). Returns `nothing` when **every** random-effect direction is on
 the boundary (no random-effects model remains — the caller falls back to the
-fixed-effects-only score ρ = rank(X), `docs/math/0006-glmm-bias-correction.md §5`), mirroring
+fixed-effects-only score ρ = rank(X)), mirroring
 the `LinearMixedModel` method and `cAIC4`'s `glm` branch.
-
-The reduction logic and the reconstruction are pinned in
-`docs/math/0007-glmm-partial-singularity-reduction.md` §1–§3.
 """
 function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
     lmm = m.LMM
@@ -704,7 +750,7 @@ a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Berno
 non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
 
 Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
-distribution for conditional bootstrap draws (`docs/math/0006` §5; ADR-0005).
+distribution for conditional bootstrap draws.
 """
 function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
     wts = m.resp.wts
@@ -719,7 +765,7 @@ Draw `B` conditional bootstrap samples from the GLMM response distribution, hold
 random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
 an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
 
-Per ADR-0005, draws directly from `f(μ̂ᵢ)`:
+Draws directly from `f(μ̂ᵢ)`:
 - **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
 - **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
   [`glmmpriorweights`](@ref).
@@ -786,6 +832,119 @@ function _fill_conddraw!(rng, Ystar, μ, d, _m)
             "scope — matches cAIC4's \"not yet supported\" warning.",
         ),
     )
+end
+
+# ── RE-structure interpretation (M4) ───────────────────────────────────────────
+
+"""
+    reterminfo(m::MixedModel) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of `m.formula` (the structural truth) into the raw
+pieces of the `cAIC4` `cnms`-analogue `RESpec` — one entry `(grouping, directions,
+correlated)` per RE term, in formula order:
+
+- `grouping` — the grouping-factor symbol (`ret.rhs.sym` of the `RandomEffectsTerm`);
+- `directions` — the `cnms`-style column labels: `"(Intercept)"` for a random intercept
+  (`InterceptTerm{true}`), then each slope's variable name. A suppressed intercept
+  (`InterceptTerm{false}`, the `0 + …` form) contributes no entry;
+- `correlated` — `false` for a `zerocorr(… | g)` term (`MixedModels.ZeroCorr`), `true` for
+  a plain `(… | g)` (`RandomEffectsTerm`).
+
+This is the **quarantine** read of MixedModels'/StatsModels' term representation
+(`RandomEffectsTerm`, `MixedModels.ZeroCorr`, `MatrixTerm`, `InterceptTerm`, `termvars`):
+the wrapping into `RESpec`/`REGroup` is fit-independent and lives outside the quarantine
+(`src/respec.jl`). Every touched type/field is shape-asserted against the pinned version.
+
+# Throws
+- `ErrorException` (drift) for an unexpected `rhs` element type, a non-`Symbol` grouping, or
+  a slope direction that is not a single-variable term.
+"""
+function reterminfo(m::MixedModel)
+    rhs = m.formula.rhs
+    rhs isa Tuple || _drift("m.formula.rhs", "Tuple", rhs)
+    return _reterminfo(rhs)
+end
+
+"""
+    reterminfo(keep::FormulaTerm, data) -> Vector{Tuple{Symbol,Vector{String},Bool}}
+
+Interpret the random-effects terms of a **schema-less** `keep` formula fragment (the `cAIC4`
+`keep\$random` analogue) into the same `(grouping, directions, correlated)` tuples as the model
+method. `keep` is first run through `MixedModels.schematize(keep, data, …)` — the same schema
+application `fit(MixedModel, …)` uses — so its `|` `FunctionTerm` bars become the
+`RandomEffectsTerm`/`ZeroCorr` terms `reterminfo` reads. The formula's left-hand side and any
+fixed-effects terms are ignored; only the RE structure is extracted.
+"""
+function reterminfo(keep::SM.FormulaTerm, data)
+    sf = MixedModels.schematize(keep, data, Dict{Symbol,Any}())
+    # A fixed-only RHS schematizes to a bare `MatrixTerm` (not a tuple); normalise so the
+    # no-random-effects case flows to an empty info list (and `extractkeep`'s `ArgumentError`).
+    rhs = sf.rhs isa Tuple ? sf.rhs : (sf.rhs,)
+    return _reterminfo(rhs)
+end
+
+# Shared RE-term reader for both `reterminfo` methods: walk a schema-applied formula RHS tuple,
+# skip the fixed-effects `MatrixTerm`, and read each `RandomEffectsTerm`/`ZeroCorr` into a
+# `(grouping, directions, correlated)` tuple.
+function _reterminfo(rhs::Tuple)
+    info = Tuple{Symbol,Vector{String},Bool}[]
+    for t in rhs
+        if t isa SM.MatrixTerm
+            continue                                  # the fixed-effects part
+        elseif t isa MixedModels.ZeroCorr
+            push!(info, _reterm_entry(t.term, false))
+        elseif t isa RandomEffectsTerm
+            push!(info, _reterm_entry(t, true))
+        else
+            _drift("formula RHS element", "MatrixTerm/RandomEffectsTerm/ZeroCorr", t)
+        end
+    end
+    return info
+end
+
+# Read one `RandomEffectsTerm` into `(grouping, directions, correlated)`. `ret.rhs` is the
+# grouping `CategoricalTerm` (its `.sym` is the factor name); `ret.lhs` is the directions
+# `MatrixTerm` (or a bare term for a single direction).
+function _reterm_entry(ret::RandomEffectsTerm, correlated::Bool)
+    grouping = ret.rhs.sym
+    grouping isa Symbol || _drift("RE term grouping `.rhs.sym`", Symbol, grouping)
+    terms = ret.lhs isa SM.MatrixTerm ? ret.lhs.terms : (ret.lhs,)
+    directions = String[]
+    for d in terms
+        if d isa SM.InterceptTerm{true}
+            push!(directions, "(Intercept)")
+        elseif d isa SM.InterceptTerm{false}
+            # suppressed intercept (`0 + …`): contributes no `cnms` column
+        else
+            vars = SM.termvars(d)
+            length(vars) == 1 ||
+                _drift("RE slope direction `termvars`", "a single-variable term", d)
+            push!(directions, string(only(vars)))
+        end
+    end
+    return (grouping, directions, correlated)
+end
+
+"""
+    responseterm(m::MixedModel)
+
+The response (left-hand-side) term of `m.formula` (`m.formula.lhs`) — supplied to
+[`render`](@ref ConditionalAIC.render) as the `lhs` of the rebuilt formula. Read from the structural
+truth `m.formula` (quarantine), no shape assertion: any `StatsModels` term is a valid `lhs`.
+"""
+responseterm(m::MixedModel) = m.formula.lhs
+
+"""
+    fixedterm(m::MixedModel) -> StatsModels.MatrixTerm
+
+The fixed-effects `MatrixTerm` of `m.formula` (the leading `m.formula.rhs[1]`) — reattached
+unchanged by [`render`](@ref ConditionalAIC.render) (the fixed part is held constant across `stepcaic`
+candidates). Shape-asserted to be a `MatrixTerm`.
+"""
+function fixedterm(m::MixedModel)
+    fe = m.formula.rhs[1]
+    fe isa SM.MatrixTerm || _drift("m.formula.rhs[1]", "MatrixTerm", fe)
+    return fe
 end
 
 end # module MMInternals

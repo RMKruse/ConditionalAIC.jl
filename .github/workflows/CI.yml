@@ -1,17 +1,9 @@
 name: CI
 
 on:
-  # CI deactivated: automatic push/pull_request triggers are disabled.
-  # Re-enable by uncommenting the two blocks below.
-  # push:
-  #   branches: [main]
-  #   tags: ['*']
-  # pull_request:
-  # Weekly fixture-rot guard. Deactivated alongside the rest of CI; re-enable with the
-  # rest. The job also runs on manual dispatch.
-  # schedule:
-  #   - cron: '0 4 * * 1'
-  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['*']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -72,10 +64,10 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
 
-  # Gated live-R re-validation (CLAUDE §6 / issue #7). Separate from the default job:
+  # Gated live-R re-validation (issue #7). Separate from the default job:
   # it stands up R, regenerates the Level-1 components, recomputes the reference ρ with
   # live cAIC4, and re-validates `dof_lmm` against it — catching fixture rot. Gated by
-  # `CAIC_LIVE_RCALL=1`; runs only on schedule/dispatch, never in the default no-R path.
+  # `CAIC_LIVE_RCALL=1`; runs on pushes to `main`, never in the default no-R path.
   # The R HDF5 reader is `rhdf5` (bundles its own HDF5 via Rhdf5lib); see ADR-0003.
   live-rcall:
     name: Live R re-validation (cAIC4)
@@ -107,3 +99,27 @@ jobs:
       - uses: julia-actions/julia-runtest@v1
         env:
           CAIC_LIVE_RCALL: '1'
+
+  # Documentation — build the Documenter manual (running every `jldoctest` block in
+  # the public docstrings) and deploy it to the `gh-pages` branch. The build runs on
+  # every PR to catch doc/doctest breakage; deployment happens only on pushes to
+  # `main` and on tags, keyed by the `DOCUMENTER_KEY` deploy secret (the same secret
+  # TagBot forwards on release). `GITHUB_TOKEN` lets Documenter post PR doc previews.
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - uses: julia-actions/julia-docdeploy@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

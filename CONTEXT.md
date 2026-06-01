@@ -33,19 +33,67 @@ Computing the cAIC value for *one* fitted model. The M2 deliverable.
 Choosing among models by cAIC. Two distinct forms, kept separate:
 - **Comparison** — scoring a user-supplied *fixed set* of fitted models and ranking them
   (`cAIC4`'s `anocAIC`; our port `anocaic`). The literal "best from among several".
-- **Search** — generating and exploring a *candidate space* (add/drop random- or fixed-effects
-  terms) to find a good model (the `stepcAIC` layer, M4).
+- **Search** — generating and exploring a *candidate space* by adding/dropping **random-effects**
+  terms to find a good model (the `stepcAIC` layer, M4). The **fixed-effects part is held
+  constant** on every candidate, matching `cAIC4`'s `(g)lmer` path (its `fixEfCandidates` feed
+  only the `gamm4` smooth-term route, which is M5). Fixed-effects *selection* would be a deliberate
+  extension **beyond** `cAIC4` and is deferred (no R ground truth to validate against).
 Both build on Scoring; both require every candidate to be scored *consistently* (same
 REML/`method`/B-source/`sigmapenalty`), which the result's provenance enforces.
 _Avoid_: using "model selection" to mean scoring one model, or conflating Comparison (a given
 set) with Search (a generated space).
 
 **Averaging** (model averaging):
-Combining several fitted models into one prediction, *weighted* by their cAIC (lower cAIC → larger
-weight), rather than selecting a single model. `cAIC4`'s `modelAvg` / `predictMA` / `summaryMA`.
-Distinct from Selection: it keeps all the models and blends them. In the parity goal as its own
-milestone **M4.5** (CLAUDE.md §11); outside the near-term scope.
+Combining several fitted models into one prediction, *weighted* rather than selecting a single
+model. `cAIC4`'s `modelAvg` / `predictMA` / `summaryMA` (+ internal `getWeights` / `weightOptim`).
+Distinct from Selection: it keeps all the models and blends them. Its own milestone **M4.5**
+(CLAUDE.md §11). **Scope (resolved 2026-05-31): Gaussian LMM only**, matching `cAIC4` — the optimal
+weight objective is Gaussian by construction (see *Zhang-optimal weights*), and there is no R ground
+truth for a GLMM weight criterion, so GLMM averaging is a deferred non-`cAIC4` extension (parallel to
+how fixed-effects *Search* was scoped out of M4). Candidates may differ in **both** fixed- and
+random-effects structure (unlike *Search*, which holds FE constant); they are combined by
+*model-averaged effects*. They must share one response/dataset and REML setting.
 _Avoid_: conflating with Comparison (which ranks and picks one) or Search.
+
+**Zhang-optimal weights** (the `opt=TRUE` path of `modelAvg`, via `getWeights`):
+The model-averaging weights `w` minimising the Mallows-type criterion of Zhang et al. (2014),
+`(y − μw)ᵀ(y − μw) + 2σ²(w·ρ)`, over the unit simplex (`Σwᵢ = 1`, `0 ≤ wᵢ ≤ 1`), where `μ` stacks
+the candidates' conditional fitted means, `ρ` is the per-candidate effective df, and `σ²` is the
+residual variance of the largest-df candidate. A convex quadratic program. Gaussian-specific (it uses
+`σ²` and a squared-error fit term), which is why *Averaging* is LMM-only.
+_Avoid_: calling these "AIC weights" — those are the *smoothed* weights below.
+
+**Buckland smoothed weights** (the `opt=FALSE` path of `modelAvg`):
+The exponential cAIC weights `wᵢ = exp(−Δᵢ/2) / Σ exp(−Δ/2)` with `Δᵢ = cAICᵢ − min cAIC` (Buckland
+et al. 1997). Need only the candidate cAIC values, not the optimizer. The simple alternative to
+*Zhang-optimal weights*.
+
+**Model-averaged effects** (`modelAvg`'s `fixeff`/`raneff`):
+The weighted combination of candidate coefficients, formed by a **name-keyed** weighted sum: each
+candidate contributes `wᵢ · coefᵢ` to every term it carries, summed across candidates over the union
+of term names (a term absent from a candidate contributes 0), reported name-sorted. Lets candidates
+with different FE/RE structures be combined. The fixed-effects analogue uses coefficient names; the
+random-effects analogue keys on (grouping factor, level, RE term).
+
+**RE-structure spec** (the `cnms` analogue):
+The internal, fit-independent description of a candidate's random-effects structure: each grouping
+factor mapped to its list of RE directions (intercept + slopes) plus a correlated/uncorrelated
+flag. The Julia analogue of `cAIC4`'s `cnms` named list. The **Search** enumerates neighbors by
+pure add/drop transforms on this spec and renders it to a formula only at fit time; candidates are
+refit via the public `fit(MixedModel, formula, data)`.
+_Avoid_: conflating the spec (structure) with the fitted candidate (a model object).
+
+**lm/glm terminal**:
+The model a backward **Search** reaches when the *last* random-effects term is dropped — a
+fixed-effects-only `lm`/`glm` (MixedModels.jl cannot fit a no-RE model, so the terminal is a
+`GLM.jl` fit). Scored with `df = rank + 1` and the conditional (= marginal here) log-likelihood,
+matching `cAIC4`'s `cAIC` for `(g)lm`. A first-class endpoint of the search, not an error.
+_Avoid_: "empty model" — it still carries the (fixed) fixed-effects part.
+
+**Search path**:
+The ordered record of the greedy **Search** — per step, the direction, the candidates scored and
+their cAICs, and the move taken. Returned in the result (replacing `cAIC4`'s printed `trace`) and
+the primary artifact for end-to-end validation against `cAIC4`'s step sequence.
 
 **Singular fit**:
 A fit in which one or more random-effects variance components are estimated on the **boundary**
@@ -120,6 +168,8 @@ removed and the model is refit on the reduced parameter space — the GLMM analo
   `anocaic` — the latter is reserved as our lowercase Julia port name. Earlier drafts had the
   spelling wrong.
 - `cAIC4` also exports a **model-averaging** suite (`modelAvg` / `predictMA` / `summaryMA`),
-  surfaced from its `NAMESPACE`. It is a distinct capability (**Averaging**), out of near-term
-  scope, now folded into the parity goal as milestone **M4.5** (CLAUDE.md §11, amended 2026-05-27;
-  see PARITY.md).
+  surfaced from its `NAMESPACE`. It is a distinct capability (**Averaging**), milestone **M4.5**
+  (CLAUDE.md §11, amended 2026-05-27; see PARITY.md). Scope and design **resolved (grilled
+  2026-05-31)**: Gaussian LMM only; public surface `modelavg`/`predictma`/`summaryma`/`getweights`
+  (`weightoptim` internal); the weight optimizer is a faithful transcription of `cAIC4`'s
+  `solnp`-based augmented-Lagrangian SQP (see [ADR-0007](docs/adr/0007-weight-optimizer-transcription.md)).

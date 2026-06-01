@@ -1,32 +1,31 @@
 """
-    cAIC.DofGLMM
+    ConditionalAIC.DofGLMM
 
 Family-specific **effective degrees of freedom** ρ for generalised linear mixed models —
-the GLMM-side analogue of [`cAIC.DofLMM`](@ref) for the Gaussian path.
+the GLMM-side analogue of [`ConditionalAIC.DofLMM`](@ref) for the Gaussian path.
 
-The estimand and all family-specific formulae are pinned in
-`docs/math/0006-glmm-bias-correction.md`. This module implements three df routes in M3
-scope:
+This module implements three df routes:
 
-- **Poisson (Chen–Stein):** [`dof_glmm_poisson`](@ref) / §3 of the math spec.
+- **Poisson (Chen–Stein):** [`dof_glmm_poisson`](@ref).
   Influence-based: one full-model refit per nonzero observation (`yᵢ → yᵢ − 1`).
-- **Bernoulli (Efron's Steinian):** [`dof_glmm_bernoulli`](@ref) / §4 of the math spec.
+- **Bernoulli (Efron's Steinian):** [`dof_glmm_bernoulli`](@ref).
   Per-observation label flip (`yᵢ → 1 − yᵢ`): `n` full-model refits, accumulated as a
   weighted logit difference.
-- **Other families — conditional bootstrap:** [`dof_glmm_bootstrap`](@ref) / §5.
+- **Other families — conditional bootstrap:** [`dof_glmm_bootstrap`](@ref).
   Binomial with `|unique(y)|>2` and any other canonical-link family. `B` conditional
-  draws `y*(b) ~ f(μ̂)` (ADR-0005 direct draw), each refitted; the link-scale covariance
-  penalty is [`DofLMM.efron_penalty`](@ref) with σ̂²=1.
+  draws `y*(b) ~ f(μ̂)` directly from the conditional response distribution, each refitted;
+  the link-scale covariance
+  penalty is [`DofLMM.efron_penalty`](@ref ConditionalAIC.DofLMM.efron_penalty) with σ̂²=1.
 
-Each route follows the same Level-1 / Level-2 isolation pattern as `DofLMM`
-(ADR-0003): a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
+Each route follows the same fit-independent / model-dispatch pattern as `DofLMM`:
+a pure arithmetic kernel ([`PoissonInfluenceComponents`](@ref) +
 [`dof_glmm_poisson`](@ref) for Poisson, [`_bernoulli_df`](@ref) for Bernoulli) carries
 the formula so it is testable without any model fitting; the
 `GeneralizedLinearMixedModel` dispatch builds those inputs via the refit loop and
 delegates.
 
-All access to `MixedModels.jl` internals goes through [`cAIC.MMInternals`](@ref)
-(CLAUDE.md §3).
+All access to `MixedModels.jl` internals is quarantined in
+[`ConditionalAIC.MMInternals`](@ref).
 """
 module DofGLMM
 
@@ -42,9 +41,9 @@ using ..MMInternals: glmmresponse, glmmlinpred, refitglmm_eta
 """
     PoissonInfluenceComponents{T<:AbstractFloat}
 
-The influence-function component set for the Poisson Chen–Stein df
-(`docs/math/0006` §3). Parametrisation-neutral — this struct carries **no** fitted
-model, so the df arithmetic is testable in isolation from any fit (ADR-0003).
+The influence-function component set for the Poisson Chen–Stein df.
+Parametrisation-neutral — this struct carries **no** fitted
+model, so the df arithmetic is testable in isolation from any fit.
 
 # Fields
 - `y::Vector{T}`: the `n`-vector of observed counts (the fitted model's response).
@@ -79,10 +78,10 @@ end
 """
     dof_glmm_poisson(c::PoissonInfluenceComponents{T}) -> T
 
-**Level-1 arithmetic dispatch** — the Chen–Stein influence df computed from
+**Arithmetic dispatch** — the Chen–Stein influence df computed from
 pre-assembled components `c`, with no model fitting.
 
-Implements `docs/math/0006` §3:
+Implements the Chen–Stein influence df:
 
 ```math
 ρ_{Pois} = ∑_{i : y_i ≠ 0} y_i (η̂_i - η̂_i^{(-i)})
@@ -102,10 +101,12 @@ decrement for the Poisson).
 
 # Example
 ```jldoctest
-julia> using cAIC: DofGLMM
+julia> using ConditionalAIC: DofGLMM
+
 julia> c = DofGLMM.PoissonInfluenceComponents(
            [2.0, 0.0, 1.0], [1.0, 0.5, 1.5], [1, 3], [0.9, 1.4]
        );
+
 julia> DofGLMM.dof_glmm_poisson(c)  # 2*(1.0-0.9) + 1*(1.5-1.4) = 0.3
 0.30000000000000004
 ```
@@ -124,13 +125,13 @@ end
 """
     dof_glmm_poisson(m::GeneralizedLinearMixedModel{T}) -> T
 
-**Level-2 model dispatch** — the Chen–Stein influence df for a fitted Poisson
+**Model dispatch** — the Chen–Stein influence df for a fitted Poisson
 `GeneralizedLinearMixedModel`.
 
 Builds a [`PoissonInfluenceComponents`](@ref) by performing one full-model refit per
 nonzero observation (`y_i → y_i − 1`, the Chen–Stein / Hudson unit decrement) and
 collecting the `i`-th fitted linear predictor from each refit. Delegates the final
-arithmetic to the Level-1 dispatch.
+arithmetic to the arithmetic dispatch.
 
 The model `m` is assumed to already be boundary-reduced (i.e. not singular); the
 caller is responsible for applying `MMInternals.reduceboundary` / the full-singularity
@@ -147,7 +148,7 @@ fallback before invoking this function (consistent with the Gaussian path and
 
 # Example
 ```julia
-using MixedModels, cAIC
+using MixedModels, ConditionalAIC
 m = fit(MixedModel, @formula(y ~ x + (1|group)), dat, Poisson(); progress=false)
 ρ = DofGLMM.dof_glmm_poisson(m)
 ```
@@ -174,7 +175,7 @@ end
     dof_glmm_bernoulli(m::GeneralizedLinearMixedModel{T}) -> T
 
 Efron's Steinian bias-corrected effective degrees of freedom for a fitted Bernoulli
-(binary logistic) GLMM. This is the `cAIC.jl` analogue of `cAIC4`'s
+(binary logistic) GLMM. This is the `ConditionalAIC.jl` analogue of `cAIC4`'s
 `biasCorrectionBernoulli` (`R/biasCorrectionBernoulli.R`).
 
 For each observation `i`, the whole model is refitted on the response with
@@ -191,7 +192,7 @@ where `μ̂ᵢ^{flip}` is the `i`-th fitted mean after refitting the model on th
 label-flipped response. `n` refits are performed — one per observation; every binary
 point is flippable (no `yᵢ = 0` skipping, unlike the Poisson Chen–Stein route).
 
-The estimand and algorithm are pinned in `docs/math/0006` §4. The ground-truth R
+The ground-truth R
 function is `cAIC4::biasCorrectionBernoulli`.
 
 # Arguments
@@ -212,11 +213,11 @@ end
 """
     _bernoulli_df(y, μhat, μhat_flip) -> T
 
-Pure Efron Steinian formula kernel for the Bernoulli GLMM effective df
-(`docs/math/0006` §4). Given pre-computed per-flip fitted means `μhat_flip`,
+Pure Efron Steinian formula kernel for the Bernoulli GLMM effective df.
+Given pre-computed per-flip fitted means `μhat_flip`,
 the result is a deterministic function of `(y, μhat, μhat_flip)`.
 
-This kernel is a Level-1 isolation unit (ADR-0003): it is fit-independent and can be
+This kernel is fit-independent and can be
 driven directly with synthetic inputs for tight-tolerance formula verification.
 
 # Arguments
@@ -249,7 +250,7 @@ end
 Conditional bootstrap effective degrees of freedom for a fitted GLMM with a family
 outside the Poisson Chen–Stein and Bernoulli Efron paths. The primary use case is
 **binomial with `|unique(y)| > 2`** (multiple-trials binomial) and any other
-canonical-link family. The estimand and algorithm are pinned in `docs/math/0006` §5.
+canonical-link family.
 
 ```math
 \\rho_{\\mathrm{boot}}
@@ -259,14 +260,13 @@ canonical-link family. The estimand and algorithm are pinned in `docs/math/0006`
 \\quad \\hat\\sigma^2 = 1 \\text{ (canonical-link families).}
 ```
 
-Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response distribution
-(ADR-0005): `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
+Each `y^{(b)} ~ f(\\hat\\mu)` is drawn directly from the conditional response
+distribution: `Poisson(μ̂ᵢ)`, `Binomial(nᵢ, μ̂ᵢ)`, or `Bernoulli(μ̂ᵢ)`. The η̂^{(b)} are
 the link-scale fitted values after refitting on `y^{(b)}` — one full GLMM refit per draw,
 via [`MMInternals.refitglmm_eta`](@ref). The bias-correction arithmetic is the shared
-[`DofLMM.efron_penalty`](@ref) kernel with σ=1.
+[`DofLMM.efron_penalty`](@ref ConditionalAIC.DofLMM.efron_penalty) kernel with σ=1.
 
-The ground-truth R function is `cAIC4::conditionalBootstrap`
-(`R/conditionalBootstrap.R`).
+The ground-truth R function is the cAIC4 conditional bootstrap routine.
 
 # Arguments
 - `m`: a fitted `GeneralizedLinearMixedModel`. The original model is not mutated; all
@@ -283,7 +283,7 @@ The ground-truth R function is `cAIC4::conditionalBootstrap`
   `deleteZeroComponents` first and fall back to `zeroLessModel\$rank`).
 
 # Throws
-- `ArgumentError` for unsupported families (free-dispersion families outside M3 scope).
+- `ArgumentError` for unsupported families (free-dispersion families outside the supported scope).
 - `ArgumentError` if a Binomial GLMM has no prior weights.
 """
 function dof_glmm_bootstrap(

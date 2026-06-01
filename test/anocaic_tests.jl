@@ -2,7 +2,7 @@
     # Tracer: the first end-to-end run of anocaic — two sleepstudy models scored and ranked.
     # The slope model has lower cAIC on sleepstudy and must be first (ascending sort).
     using MixedModels
-    using cAIC: anocaic, AnocaicTable
+    using ConditionalAIC: anocaic, AnocaicTable
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -30,7 +30,7 @@ end
     # Passing the models in reverse order must produce the same ranking. inputorder[k] is
     # the 1-based position of the k-th ranked model in the argument list.
     using MixedModels
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -60,7 +60,7 @@ end
 @testitem "anocaic handles a single model (degenerate comparison)" tags = [:level2] begin
     # A one-model comparison is valid: one entry, delta trivially 0, result matches caic.
     using MixedModels
-    using cAIC: anocaic, AnocaicTable, caic
+    using ConditionalAIC: anocaic, AnocaicTable, caic
 
     data = MixedModels.dataset(:sleepstudy)
     m = fit(
@@ -84,7 +84,7 @@ end
     # Every result must carry the same resolved method and B-source — consistent scoring is
     # the contract of the comparison layer (CONTEXT.md Selection definition).
     using MixedModels
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -112,7 +112,7 @@ end
     # Mixing a REML fit and an ML fit contaminates the ranking (cAIC values are not
     # comparable across objectives). anocaic must reject this with a clear ArgumentError.
     using MixedModels
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     data = MixedModels.dataset(:sleepstudy)
     m_ml = fit(
@@ -137,7 +137,7 @@ end
     # get a MethodError from Julia's dispatch, not a runtime ArgumentError; this is the
     # idiomatic Julia way to enforce non-empty varargs (avoids an unbound type parameter
     # in the generated kwarg wrapper that Aqua would flag).
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     @test_throws MethodError anocaic()
 end
@@ -146,7 +146,7 @@ end
     # The show method must surface the comparison structure: rank, cAIC, ρ, condloglik,
     # and Δcaic (the user-facing contract for the comparison layer).
     using MixedModels
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -175,7 +175,7 @@ end
     # Type instability in the comparison spine is a defect (CLAUDE.md §4). @inferred
     # asserts the compiler resolves anocaic to a concrete AnocaicTable{Float64,...}.
     using MixedModels
-    using cAIC: anocaic, AnocaicTable
+    using ConditionalAIC: anocaic, AnocaicTable
 
     data = MixedModels.dataset(:sleepstudy)
     m_slope = fit(
@@ -207,7 +207,7 @@ end
     # the table values against the same fixture confirms both scoring and table construction.
     using HDF5
     using MixedModels
-    using cAIC: anocaic
+    using ConditionalAIC: anocaic
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
     L2_ATOL = 1e-3   # derived Level-2 tolerance; see DECISIONS.md (2026-05-27)

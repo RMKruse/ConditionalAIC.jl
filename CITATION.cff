@@ -1,0 +1,69 @@
+cff-version: 1.2.0
+message: >-
+  If you use ConditionalAIC.jl in published work, please cite the software
+  together with the two methodology papers listed under references.
+title: ConditionalAIC.jl
+abstract: >-
+  Conditional Akaike Information Criterion and conditional model selection for
+  mixed-effects models fitted with MixedModels.jl. A Julia re-platforming of the
+  R package cAIC4.
+type: software
+version: 0.1.0
+license: MIT
+authors:
+  - family-names: Kruse
+    given-names: René Marcel
+    email: rene.marcel.kruse@protonmail.com
+repository-code: "https://github.com/RMKruse/ConditionalAIC.jl"
+url: "https://RMKruse.github.io/ConditionalAIC.jl"
+keywords:
+  - conditional AIC
+  - mixed-effects models
+  - model selection
+  - degrees of freedom
+  - Julia
+references:
+  - type: article
+    title: "On the behaviour of marginal and conditional AIC in linear mixed models"
+    authors:
+      - family-names: Greven
+        given-names: Sonja
+      - family-names: Kneib
+        given-names: Thomas
+    journal: Biometrika
+    year: 2010
+    volume: 97
+    issue: 4
+    start: 773
+    end: 789
+    doi: 10.1093/biomet/asq042
+  - type: article
+    title: "Conditional Model Selection in Mixed-Effects Models with cAIC4"
+    authors:
+      - family-names: Säfken
+        given-names: Benjamin
+      - family-names: Rügamer
+        given-names: David
+      - family-names: Kneib
+        given-names: Thomas
+      - family-names: Greven
+        given-names: Sonja
+    journal: Journal of Statistical Software
+    year: 2021
+    volume: 99
+    issue: 8
+    doi: 10.18637/jss.v099.i08
+  - type: article
+    title: "Model averaging for linear mixed models via augmented Lagrangian"
+    authors:
+      - family-names: Kruse
+        given-names: René-Marcel
+      - family-names: Silbersdorff
+        given-names: Alexander
+      - family-names: Säfken
+        given-names: Benjamin
+    journal: Computational Statistics & Data Analysis
+    year: 2022
+    volume: 167
+    start: 107351
+    doi: 10.1016/j.csda.2021.107351

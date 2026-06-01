@@ -1,21 +1,24 @@
 """
-    cAIC.Components
+    ConditionalAIC.Components
 
-Build the Gaussian-LMM bias-correction component set ([`cAIC.DofLMM.GaussianComponents`](@ref))
-from the raw quantities extracted from a fitted `LinearMixedModel` — the `cAIC.jl` analogue
+Build the Gaussian-LMM bias-correction component set ([`ConditionalAIC.DofLMM.GaussianComponents`](@ref))
+from the raw quantities extracted from a fitted `LinearMixedModel` — the `ConditionalAIC.jl` analogue
 of `cAIC4`'s `getModelComponents.merMod`.
 
-This module performs the **construction** (the math of `docs/math/0002-gaussian-bias-correction.md`
-§3 and §6); it touches **no** `MixedModels` object — only the dense arrays the quarantine
-module [`cAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`, the per-reterm `Z`/`λ` blocks,
-and the `θ`-parametrisation map). It is therefore the fit-dependent bridge that ADR-0003
-places at **Level-2**: it is exercised end-to-end through the assembled [`caic`](@ref), not
-in Level-1 isolation.
+This module performs the **construction**; it touches **no** `MixedModels` object — only the
+dense arrays the quarantine module [`ConditionalAIC.MMInternals`](@ref) extracts (`X`, `y`, `ŷ`,
+the per-reterm `Z`/`λ` blocks, and the `θ`-parametrisation map). It is the fit-dependent bridge,
+exercised end-to-end through the assembled [`caic`](@ref ConditionalAIC.caic).
 
 Every linear solve goes through a Cholesky factorisation; no explicit inverse and no `det`
-is formed (CLAUDE §9). The scaled inverse marginal variance `V₀⁻¹` is built from the
-Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`
-(`docs/math/0002` §3), and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
+is formed. The scaled inverse marginal variance `V₀⁻¹` is built from the
+Woodbury identity through a Cholesky of the `q×q` capacitance matrix `I + (ZΛ)ᵀ(ZΛ)`,
+and `A`'s fixed-effects adjustment from a Cholesky of `Xᵀ V₀⁻¹ X`.
+
+The resulting `V₀⁻¹`, `A`, and per-component `Wⱼ` are dense `n×n` (`O(n²)` storage,
+`O(n³)` work) — the accepted, faithful-to-`cAIC4` `getModelComponents.merMod` layout that
+keeps the bias correction parametrisation-neutral and Level-1-isolable, not a missed
+optimisation; see [ADR-0003](../docs/adr/0003-level1-isolation-boundary.md) addendum.
 """
 module Components
 
@@ -29,10 +32,10 @@ using ..DofLMM: GaussianComponents
 Assemble the [`GaussianComponents`](@ref) of a fitted Gaussian LMM from its extracted
 pieces. `X` is the `n×p` fixed-effects design, `y` the response, `μ = ŷ` the conditional
 fitted mean, `Zblocks`/`λblocks` the per-reterm dense `Z` and `λ` blocks, and `parmap` the
-`θ → (reterm, row, col)` map (`docs/math/0002` §3, §6). `isREML` selects the objective the
+`θ → (reterm, row, col)` map. `isREML` selects the objective the
 downstream bias correction uses.
 
-Builds, all via Cholesky solves (no explicit inverse; CLAUDE §9):
+Builds, all via Cholesky solves (no explicit inverse):
 
 - `ZΛ` block-by-block (`Λ` is block-diagonal across reterms and group copies);
 - `V₀⁻¹ = Iₙ − (ZΛ)(Iₖ + (ZΛ)ᵀ(ZΛ))⁻¹(ZΛ)ᵀ` (Woodbury);
