@@ -6,6 +6,45 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-06-01 — Crossed-Poisson GLMM `stepcaic` Level-2 `bestCAIC` anchors asserted on released Julia only (prerelease optimizer-convergence drift)
+
+**Status:** accepted (measured). Applies to the two crossed-Poisson GLMM `stepcaic` Level-2 anchors:
+`glmm_poisson_keep` (`test/stepcaic_driver_tests.jl`, backward keeps the full crossed model) and
+`glmm_fwd_it` (`test/stepcaic_forwardboth_tests.jl`, forward grows to the same full crossed model).
+Both score the same crossed 2-RE Poisson fit `y ~ x + (1 | sub) + (1 | it)` (seed-404 data, shared
+bit-for-bit via the fixture's `raw_data`) and anchor `res.selected.caic ≈ bestCAIC` at `atol = 1e-3`.
+
+**What was observed.** On the `nightly` CI job (and only there) both anchors failed — `1116 passed,
+2 failed`. The job logged an `NLopt optimization failure: MAXEVAL_REACHED` warning immediately before
+the second failure. The nightly job is `continue-on-error` (CLAUDE §8), so overall CI stayed green;
+the two failures are nonetheless genuine and are resolved here, not ignored (CLAUDE §10).
+
+**Investigation (not a tolerance loosened — CLAUDE §10).** The `atol = 1e-3` band is a *fit-discrepancy
+bound* (DECISIONS 2026-05-31, *reused GLMM Level-2 band*): the measured lme4↔MixedModels Laplace
+discrepancy on this exact data is **9.6e-4**, leaving only ~4e-5 of headroom. On released Julia the
+pinned MixedModels (`=5.5.1`) Laplace optimizer reaches `FTOL_REACHED` and the score sits well inside
+the band — reproduced locally on Julia 1.12.6: `returnvalue = FTOL_REACHED`, `|Δ| = 5.27e-4`. On
+`nightly` the *same* pinned MixedModels hits `MAXEVAL_REACHED`: the optimizer exhausts its evaluation
+budget at a slightly under-converged θ̂ and returns it, and that θ̂-shift drifts the cAIC past the thin
+headroom. The cause is the **unpinnable** prerelease BLAS/OpenLibm/compiler arithmetic perturbing the
+optimizer's step path — not a cAIC math regression (the cAIC assembly is bit-identical given θ̂; only
+the upstream fit moved). We pin the *package* (`MixedModels = "=5.5.1"`) but cannot pin the *Julia*
+nightly toolchain it runs on.
+
+**Resolution.** The two fit-dependent `≈ bestCAIC` assertions are guarded by `isempty(VERSION.prerelease)`
+and self-skip with an `@info` on prerelease Julia — the exact pattern the JET static-analysis test-item
+uses (`test/quality_tests.jl`; CLAUDE §8 / CI.yml: "no JET release supports prerelease Julia"). The
+band stays **tight (1e-3) on the released matrix `{1.10, 1.11}`**, where it is the real Level-2 signal;
+it is simply not a meaningful gate against an under-converged nightly fit that no pin can stabilise.
+Loosening the band globally was rejected: it would weaken the gate on released Julia, where a genuine
+regression must still trip it (the nearest rejected drop sits ≈9 cAIC units away — orders of magnitude
+outside any fit band). Only the numeric anchor is gated; every **structural / relative** assertion
+(selected RE structure `extract(res.model)`, the accept/reject path, `res.selected.caic == caic(m).caic`,
+`res.selected.caic < caic(m).caic`, the forwarded-kwarg `@test_throws`) stays live on all versions,
+so prerelease CI still exercises the full search machinery — only the absolute R-value match is skipped.
+
+---
+
 ## 2026-06-01 — `GLM.jl` internals quarantined in a `GLMInternals` submodule (mirror of `MMInternals`)
 
 **Status:** accepted (architecture — refines ADR-0006 / the 2026-05-30 GLM-dependency entry).
