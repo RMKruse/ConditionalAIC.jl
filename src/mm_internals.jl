@@ -338,15 +338,8 @@ random-effect direction is on the boundary (no random-effects model remains — 
 falls back to the fixed-effects-only score, mirroring `cAIC4`'s `lm` branch).
 """
 function reduceboundary(m::LinearMixedModel{T}) where {T}
-    reduced = AbstractReMat{T}[]
-    for re in m.reterms
-        re isa ReMat || _drift("m.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        keep = [d for d in 1:S if re.λ[d, d] != 0]
-        isempty(keep) && continue
-        push!(reduced, _subsetreterm(re, keep))
-    end
-    isempty(reduced) && return nothing
+    reduced = _reducedreterms(m.reterms, T, "m.reterms element")
+    reduced === nothing && return nothing
     mr = LinearMixedModel(response(m), m.feterm, reduced, m.formula)
     fit!(mr; progress=false)
     return mr
@@ -384,6 +377,32 @@ function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
         adjA(re.refs, znew),
         scratchnew,
     )
+end
+
+# The surviving (non-boundary) directions of one reterm: the 1-based indices `d` whose
+# relative-covariance diagonal `λ[d, d]` is off the boundary (`≠ 0`) — the `cAIC4` `theta != 0`
+# direction filter shared by the boundary-reduction builders and the full-singularity query. An
+# empty result marks a reterm with every direction on the boundary. `driftlabel` names the
+# reterm source for the drift error.
+function _keptdirections(re, driftlabel::AbstractString)
+    re isa ReMat || _drift(driftlabel, "ReMat", re)
+    S = size(re.λ, 1)
+    return [d for d in 1:S if re.λ[d, d] != 0]
+end
+
+# One structural reduction of a reterm collection: drop every boundary direction from each
+# reterm and rebuild the survivors fresh (via [`_subsetreterm`]), returning the reduced reterm
+# vector — or `nothing` when no direction survives anywhere (the model collapses to
+# fixed-effects only). The shared core of both [`reduceboundary`] methods (the Gaussian fit and
+# the GLMM's working LMM); `driftlabel` names the reterm source for the drift error.
+function _reducedreterms(reterms, ::Type{T}, driftlabel::AbstractString) where {T}
+    reduced = AbstractReMat{T}[]
+    for re in reterms
+        keep = _keptdirections(re, driftlabel)
+        isempty(keep) && continue
+        push!(reduced, _subsetreterm(re, keep))
+    end
+    return isempty(reduced) ? nothing : reduced
 end
 
 """
@@ -506,9 +525,7 @@ or for a non-singular fit — those cases are handled by the general GLMM influe
 """
 function glmmisfullysingular(m::GeneralizedLinearMixedModel)
     for re in m.LMM.reterms
-        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        any(d -> re.λ[d, d] != 0, 1:S) && return false
+        isempty(_keptdirections(re, "m.LMM.reterms element")) || return false
     end
     return true
 end
@@ -542,15 +559,8 @@ the `LinearMixedModel` method and `cAIC4`'s `glm` branch.
 """
 function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
     lmm = m.LMM
-    reduced = AbstractReMat{T}[]
-    for re in lmm.reterms
-        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        keep = [d for d in 1:S if re.λ[d, d] != 0]
-        isempty(keep) && continue
-        push!(reduced, _subsetreterm(re, keep))
-    end
-    isempty(reduced) && return nothing
+    reduced = _reducedreterms(lmm.reterms, T, "m.LMM.reterms element")
+    reduced === nothing && return nothing
 
     y = glmmresponse(m)                       # m.resp.y, shape-asserted to Vector{T}
     β = m.β

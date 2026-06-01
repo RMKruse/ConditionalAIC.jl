@@ -18,13 +18,19 @@ The fields are the public, typed accessors:
   `nothing` when the fit was non-singular and scored as given (always `nothing` for the
   never-singular `lm`/`glm` terminal).
 - `refit::Bool` — whether scoring was performed on a refitted reduced model.
-- `method::Symbol` — the degrees-of-freedom **method** actually used (provenance), e.g.
-  `:steinian`.
-- `bsource::Symbol` — the Hessian **B-source** actually used (provenance), e.g.
-  `:analytic`.
+- `method::Symbol` — the degrees-of-freedom **method** actually used (provenance), one of
+  the closed set `:steinian` | `:bootstrap` | `:terminal`. `:steinian` is the analytic
+  covariance-penalty correction (Greven–Kneib for the LMM; the family-dispatched Stein-type
+  df — Poisson Chen–Stein / Bernoulli Efron — for the GLMM); `:bootstrap` the
+  parametric/conditional bootstrap penalty; `:terminal` the deterministic `(g)lm` terminal.
+- `bsource::Symbol` — the Hessian **B-source** actually used (provenance), one of
+  `:analytic` | `:forwarddiff` | `:finitediff` | `:na` (`:na` whenever no Hessian B is
+  formed — every `:bootstrap` and `:terminal` result, and the GLMM paths).
 
-`method`/`bsource` record what was *resolved and run* (e.g. `method = :auto` resolves to
-`:steinian` for the Gaussian family), so candidates can be checked for consistent scoring.
+`method`/`bsource` record what was *resolved and run* — the request-level `method = :auto`
+never appears, resolving to `:steinian` on both the Gaussian and the analytic GLMM paths — so
+candidates can be checked for consistent scoring. These two closed Symbol domains are the
+stable provenance surface; only values from the sets above are ever stored.
 
 The model bound is `M <: RegressionModel` (the common supertype of `LinearMixedModel`,
 `GeneralizedLinearMixedModel`, and the `GLM.jl` `lm`/`glm` terminal a backward `stepcaic`

@@ -159,6 +159,14 @@ function dof_glmm_poisson(m::GeneralizedLinearMixedModel{T}) where {T}
     ind = findall(!=(zero(T)), y)
     isempty(ind) && return zero(T)
 
+    # One full-model refit per nonzero observation, each from a fresh copy of the ORIGINAL fit
+    # (`refitglmm_eta` deep-copies `m` per call): decrement yᵢ by one (the Chen–Stein / Hudson
+    # unit decrement) and read the i-th refitted linear predictor η̂ᵢ^{(−i)}. The per-i fresh copy
+    # is deliberate and *not* interchangeable with a single reused buffer: reusing one buffer
+    # warm-starts the fixed-effects β from the previous perturbation's optimum (θ is reset to the
+    # canonical initial either way), which shifts the Poisson df past the Level-2 parity tolerance.
+    # This loop therefore is NOT unified with the Bernoulli flip loop (which does reuse one
+    # buffer) — their buffering differs for a numerical reason, not by oversight.
     eta_dec = Vector{T}(undef, length(ind))
     @inbounds for (k, i) in enumerate(ind)
         y_dec = copy(y)
