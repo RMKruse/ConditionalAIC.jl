@@ -386,8 +386,9 @@ function _runstepcaic(
         CAICResult{T}[savedpool[i] for i in order[1:min(nsave, length(order))]]
     end
 
-    result(res, model, selkey) =
-        StepcaicResult(res, model, path, finalsaved(selkey, res), options)
+    result(res, model, selkey) = StepcaicResult(
+        res, model, path, finalsaved(selkey, res), options
+    )
 
     stepsleft = options.steps
     while stepsleft > 0
@@ -611,10 +612,12 @@ function stepcaic(
     lhs = MMInternals.responseterm(m)
     dist = MMInternals.glmmdist(m)
     wts = MMInternals.glmmpriorweights(m)
-    score(model) =
-        caic(model; method, nboot, rng)::CAICResult{T,GeneralizedLinearMixedModel{T,D}}
-    refitcand(c) =
-        fit(MixedModel, render(c, fixed, lhs), data, dist; weights=wts, progress=false)
+    score(model) = caic(
+        model; method, nboot, rng
+    )::CAICResult{T,GeneralizedLinearMixedModel{T,D}}
+    refitcand(c) = fit(
+        MixedModel, render(c, fixed, lhs), data, dist; weights=wts, progress=false
+    )
     terminalfit() = (
         tm=GLM.glm(_StatsModels.FormulaTerm(lhs, fixed), data, dist; wts=wts);
         (tm, caic(tm))
