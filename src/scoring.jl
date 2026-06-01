@@ -323,7 +323,7 @@ end
 # `glmmpriorweights` carries the per-observation binomial trial counts (empty for
 # Poisson/Bernoulli); only the Binomial branch consumes them.
 function _glmm_condll(m::GeneralizedLinearMixedModel)
-    return _glmm_condloglik_dispatch(
+    return _condll_by_family(
         MMInternals.glmmdist(m),
         MMInternals.glmmresponse(m),
         MMInternals.glmmfittedmu(m),
@@ -345,20 +345,23 @@ function _glmm_score_df(
     return _glmm_df_auto(m, MMInternals.glmmdist(m))
 end
 
-# Family dispatch for the GLMM conditional log-likelihood. `wts` are the binomial trial
-# counts (`glmmpriorweights`); ignored by Poisson/Bernoulli, consumed by Binomial.
-function _glmm_condloglik_dispatch(::Poisson, y, μ, wts)
+# Shared family→conditional-log-likelihood map. Returns ℓ for the supported response families
+# (Poisson, Bernoulli, multi-trial Binomial), reused by *both* the GLMM scoring path
+# (`_glmm_condll`) and the `glm` terminal (`_glm_terminal`) so the family→kernel choice cannot
+# drift between them. `wts` are the per-observation binomial trial counts (the prior weights);
+# ignored by Poisson/Bernoulli, consumed by Binomial.
+function _condll_by_family(::Poisson, y, μ, wts)
     return Loglik.condloglik_poisson(y, μ)
 end
-function _glmm_condloglik_dispatch(::Bernoulli, y, μ, wts)
+function _condll_by_family(::Bernoulli, y, μ, wts)
     return Loglik.condloglik_bernoulli(y, μ)
 end
-function _glmm_condloglik_dispatch(::Binomial, y, μ, wts)
+function _condll_by_family(::Binomial, y, μ, wts)
     # Multi-trial binomial — the correct binomial density, deviating from cAIC4's defective
     # getcondLL (DECISIONS.md 2026-05-29; docs/math/0006 §1.1). nᵢ are the prior weights.
     return Loglik.condloglik_binomial(y, μ, wts)
 end
-function _glmm_condloglik_dispatch(d, y, μ, wts)
+function _condll_by_family(d, y, μ, wts)
     throw(
         ArgumentError(
             "caic: unsupported GLMM family $(typeof(d)). Supported conditional \
@@ -459,39 +462,22 @@ _terminalrank(m::TableRegressionModel) = length(coef(m))
 # (DECISIONS 2026-05-30), so this field is stable for the supported version.
 _glmfamily(m::TableRegressionModel{<:GeneralizedLinearModel}) = m.model.rr.d
 
-# `glm` terminal: score by family, reusing the `Loglik` GLMM kernels at the fitted mean μ̂.
-# df = rank + 1 (cAIC4's `(g)lm` branch), as for the Gaussian `lm`.
+# `glm` terminal: score by family, reusing the shared `_condll_by_family` map at the fitted
+# mean μ̂. df = rank + 1 (cAIC4's `(g)lm` branch), as for the Gaussian `lm`. The supported
+# families share one body; the function-barrier dispatch on `_glmfamily(m)` keeps it
+# type-stable. `m.model.rr.wts` carries the per-observation binomial trial counts (the prior
+# weights) — consumed only by the Binomial kernel, ignored by Poisson/Bernoulli. That Binomial
+# path reuses the corrected `condloglik_binomial`, the documented DEVIATION from cAIC4's
+# defective multi-trial getcondLL (DECISIONS 2026-05-29 / 2026-05-30), exactly as the M3 GLMM
+# binomial path does.
 caic(m::TableRegressionModel{<:GeneralizedLinearModel}) = _glm_terminal(m, _glmfamily(m))
 
-function _glm_terminal(m::TableRegressionModel, ::Poisson)
+function _glm_terminal(m::TableRegressionModel, d::Union{Poisson,Bernoulli,Binomial})
     y = response(m)
     μ = predict(m)
     T = float(eltype(y))
-    ρ = T(_terminalrank(m) + 1)
-    ℓ = Loglik.condloglik_poisson(y, μ)
-    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
-end
-
-function _glm_terminal(m::TableRegressionModel, ::Bernoulli)
-    y = response(m)
-    μ = predict(m)
-    T = float(eltype(y))
-    ρ = T(_terminalrank(m) + 1)
-    ℓ = Loglik.condloglik_bernoulli(y, μ)
-    return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
-end
-
-function _glm_terminal(m::TableRegressionModel, ::Binomial)
-    # Multi-trial Binomial — the documented DEVIATION (DECISIONS 2026-05-29 / 2026-05-30): cAIC4's
-    # binomial getcondLL is −∞ for nᵢ > 1, so this reuses the corrected `condloglik_binomial` at the
-    # true per-observation trial counts, exactly as the M3 GLMM binomial path does. The response is
-    # the success proportion kᵢ/nᵢ and the trial counts nᵢ are the fit's prior weights.
-    y = response(m)
-    μ = predict(m)
-    n = m.model.rr.wts
-    T = float(eltype(y))
-    ρ = T(_terminalrank(m) + 1)
-    ℓ = Loglik.condloglik_binomial(y, μ, n)
+    ρ = T(_terminalrank(m) + 1)                       # cAIC4: df = rank + 1
+    ℓ = _condll_by_family(d, y, μ, m.model.rr.wts)
     return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
 end
 
