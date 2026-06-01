@@ -12,12 +12,10 @@
 # (ADR-0003) is fit-independent, so no model fit and no `getModelComponents` is involved.
 # The gated *live-RCall* CI job is what re-validates against the installed `cAIC4` package.
 #
-# HDF5 reader: `rhdf5` (Bioconductor), which bundles its own correctly-linked HDF5 via
-# `Rhdf5lib`. This substitutes for ADR-0003's originally-named `hdf5r`, which does not
-# build against Homebrew R on macOS-ARM (its source build leaves H5* symbols undefined in
-# the flat namespace under R's `-undefined dynamic_lookup` bundle link). The HDF5 file
-# format and the whole pipeline are unchanged — only the R package differs. See the
-# ADR-0003 addendum dated 2026-05-27.
+# HDF5 I/O goes through `test/fixture_io.R`, which selects the R HDF5 package per platform
+# (`hdf5r` on the Linux CI runner, `rhdf5` on macOS-ARM) behind a single function surface.
+# The HDF5 file format and the whole pipeline are unchanged — only the backing R package
+# differs by platform. See the ADR-0003 addenda (2026-05-27, 2026-06-02).
 #
 # The computation-bearing matrices A, V0inv, Wⱼ are symmetric, so the Julia↔R
 # column/row-major round-trip leaves them unchanged.
@@ -28,7 +26,7 @@
 #
 # Usage:  Rscript test/generate_fixtures.R
 
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")
@@ -100,7 +98,7 @@ for (name in case_names) {
 }
 
 put("meta/cAIC4_version", caic4_version)
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version", R.version.string)
 
 cat(sprintf(

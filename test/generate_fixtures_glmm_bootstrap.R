@@ -29,7 +29,7 @@
 # Usage: Rscript test/generate_fixtures_glmm_bootstrap.R
 
 suppressMessages(library(lme4))
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")
@@ -111,7 +111,7 @@ put("nboot",   as.integer(B))
 h5createGroup(fixture, "meta")
 put("meta/generator",     "cAIC.jl test/generate_fixtures_glmm_bootstrap.R")
 put("meta/cAIC4_version", caic4_version)
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version",     R.version.string)
 put("meta/lme4_version",  as.character(packageVersion("lme4")))
 put("meta/model",         "incid/hsz ~ period + (1|herd), family=binomial, weights=hsz")

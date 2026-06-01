@@ -269,7 +269,8 @@ end
 ] begin
     using HDF5
     using MixedModels
-    using ConditionalAIC: caic, extract, RESpec, REGroup, stepcaic, StepcaicResult
+    using ConditionalAIC:
+        caic, extract, RESpec, REGroup, stepcaic, StepcaicResult, MMInternals
 
     asscalar(x) = x isa AbstractArray ? only(x) : x
 
@@ -314,16 +315,19 @@ end
 
     # … and matches cAIC4's bestCAIC within the GLMM end-to-end Level-2 band (atol=1e-3; the measured
     # lme4↔MixedModels discrepancy on this data is 9.6e-4 — DECISIONS 2026-05-29/30). The band is a
-    # fit-discrepancy bound calibrated against the pinned MixedModels Laplace fit on *released* Julia,
-    # where the optimizer reaches FTOL_REACHED (Δ ≈ 5.3e-4, comfortably inside 1e-3). On prerelease
-    # Julia the same fit hits NLopt MAXEVAL_REACHED — an under-converged θ̂ from the unpinnable
-    # nightly BLAS/libm path, not a cAIC defect — which drifts the score past the thin ~4e-5 headroom.
-    # Like the JET self-skip, the anchor is asserted only on released Julia (DECISIONS 2026-06-01).
+    # fit-discrepancy bound whose premise is a *converged* MixedModels Laplace fit: when the optimizer
+    # reaches a stationary θ̂ the score sits well inside the band (FTOL_REACHED, Δ ≈ 5.3e-4). When the
+    # optimizer instead exhausts its evaluation budget and returns an under-converged θ̂
+    # (MAXEVAL_REACHED — driven by the unpinnable platform BLAS/libm path on some CI runners, not a
+    # cAIC defect: the assembly is bit-identical given θ̂), that θ̂-shift drifts the score past the thin
+    # ~4e-5 headroom. The anchor is therefore gated on the *observed* convergence of the scored fit —
+    # not on the Julia version — so it stays a tight gate wherever the fit is valid and self-skips only
+    # when its premise fails (DECISIONS 2026-06-02). Every structural/relative assertion stays live.
     L2_ATOL = 1e-3
-    if isempty(VERSION.prerelease)
+    if MMInternals.converged(res.model)
         @test res.selected.caic ≈ bestCAIC atol = L2_ATOL
     else
-        @info "Skipping GLMM Level-2 bestCAIC anchor on prerelease Julia $(VERSION) (optimizer-convergence drift)"
+        @info "Skipping GLMM Level-2 bestCAIC anchor: scored fit did not converge ($(res.model.optsum.returnvalue)) — under-converged θ̂ drifts the score past the thin fit band"
     end
 
     # The path recorded one scoring round of the two GLMM drops, rejected (incumbent kept).
@@ -678,8 +682,9 @@ end
     )
 
     # savedmodels = 0 keeps all distinct scored models; the rest are a plain backward run.
-    opts(skip) =
-        StepcaicOptions(:backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false)
+    opts(skip) = StepcaicOptions(
+        :backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false
+    )
 
     noskip = _runstepcaic(
         Float64, m, score, tainted_refit, terminalfit, gencands, opts(false); keep=nothing

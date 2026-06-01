@@ -33,12 +33,12 @@
 # divergence is recorded in DECISIONS.md, not papered over with a fixture.
 #
 # `cAIC4` is sourced directly from the committed source tree (as the other generators do).
-# HDF5 writer: `rhdf5`. Env vars CAIC4_SRC / FIXTURE as in generate_fixtures_level2.R.
+# HDF5 I/O via `test/fixture_io.R` (hdf5r/rhdf5). Env vars CAIC4_SRC / FIXTURE as in generate_fixtures_level2.R.
 #
 # Usage:  Rscript test/generate_fixtures_singular.R
 
 suppressMessages({
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
   library(lme4)
 })
 
@@ -122,7 +122,7 @@ for (reml in c(FALSE, TRUE)) {
 h5createGroup(fixture, "meta")
 h5write(caic4_version, fixture, "meta/cAIC4_version")
 h5write(as.character(packageVersion("lme4")), fixture, "meta/lme4_version")
-h5write(as.character(packageVersion("rhdf5")), fixture, "meta/rhdf5_version")
+h5write(fixture_hdf5_backend(), fixture, "meta/hdf5_backend")
 h5write(R.version.string, fixture, "meta/R_version")
 
 cat(sprintf(

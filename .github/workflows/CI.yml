@@ -73,13 +73,15 @@ jobs:
   # it stands up R, regenerates the Level-1 components, recomputes the reference ρ with
   # live cAIC4, and re-validates `dof_lmm` against it — catching fixture rot. Gated by
   # `CAIC_LIVE_RCALL=1`; runs on pushes to `main`, never in the default no-R path.
-  # The R HDF5 reader is `rhdf5` (bundles its own HDF5 via Rhdf5lib); see ADR-0003.
+  # The R HDF5 package is `hdf5r` (links system libhdf5, installed as a Posit PM binary);
+  # the generators reach it through `test/fixture_io.R`, which falls back to `rhdf5` on
+  # platforms where `hdf5r` does not build (macOS-ARM local). See ADR-0003.
   live-rcall:
     name: Live R re-validation (cAIC4)
     runs-on: ubuntu-latest
-    # Push-only: this job builds R + rhdf5 from scratch, far too heavy to run on every
-    # PR. Fixture rot is caught post-merge on `main` (and on tags). PRs get the fast,
-    # no-R fixture path via the `test` job.
+    # Push-only: this job stands up R + system HDF5 + cAIC4 from scratch, far too heavy to
+    # run on every PR. Fixture rot is caught post-merge on `main` (and on tags). PRs get the
+    # fast, no-R fixture path via the `test` job.
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
@@ -90,11 +92,14 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: 'release'
-      - name: Install rhdf5 (bundles HDF5 via Rhdf5lib)
+      - name: Install system HDF5 (libhdf5 for the hdf5r R package)
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+      - name: Install hdf5r (links system libhdf5; binary via Posit PM)
         shell: Rscript {0}
         run: |
-          if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
-          BiocManager::install("rhdf5", update = FALSE, ask = FALSE)
+          install.packages("hdf5r")
+          # Fail loud here rather than mid-fixture if the package did not install/load.
+          stopifnot("hdf5r failed to install/load" = requireNamespace("hdf5r", quietly = TRUE))
       - name: Fetch the pinned cAIC4 v1.1 source (ground truth)
         run: |
           set -e

@@ -35,7 +35,7 @@
 # Usage:  Rscript test/generate_fixtures_glmm_poisson.R
 
 suppressMessages(library(lme4))
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture_path <- Sys.getenv("FIXTURE", "")
