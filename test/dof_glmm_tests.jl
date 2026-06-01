@@ -440,7 +440,7 @@ end
 ] begin
     using MixedModels
     using Random: Xoshiro
-    using ConditionalAIC: MMInternals
+    using ConditionalAIC: DofGLMM
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -454,7 +454,7 @@ end
 
     n = length(cbpp.herd)
     B = 50
-    Ystar = MMInternals.glmmconddraw(Xoshiro(7), m, B)
+    Ystar = DofGLMM.glmmconddraw(Xoshiro(7), m, B)
 
     @test Ystar isa Matrix{Float64}
     @test size(Ystar) == (n, B)
@@ -471,7 +471,7 @@ end
     using MixedModels
     using Random: Xoshiro
     using Statistics: mean
-    using ConditionalAIC: MMInternals
+    using ConditionalAIC: MMInternals, DofGLMM
 
     cbpp = MixedModels.dataset(:cbpp)
     m = fit(
@@ -485,7 +485,7 @@ end
 
     μhat = MMInternals.glmmfittedmu(m)
     B = 2000
-    Ystar = MMInternals.glmmconddraw(Xoshiro(13), m, B)
+    Ystar = DofGLMM.glmmconddraw(Xoshiro(13), m, B)
     rowmeans = vec(mean(Ystar; dims=2))
 
     # 3-sigma tolerance: SE ≈ sqrt(μ*(1-μ)/B) per observation.
