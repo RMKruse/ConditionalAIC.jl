@@ -395,6 +395,53 @@ end
     @test wr.duration isa Float64
 end
 
+@testitem "getweights slow path re-scores ρ under the modelavg caic kwargs, not defaults" tags = [
+    :level2
+] begin
+    # A :smoothed result routes getweights through the slow path, which re-scores ρ with caic.
+    # It must re-score under the SAME options modelavg scored the candidates with (stored in
+    # res.caickwargs) — not caic's defaults. With a non-default sigmapenalty, the slow path
+    # must therefore agree with a :zhang modelavg run at the same sigmapenalty, and disagree
+    # with one run at the default sigmapenalty=1.
+    using MixedModels
+    using ConditionalAIC: modelavg, getweights
+
+    data = MixedModels.dataset(:sleepstudy)
+    m1 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 + days | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+    m2 = fit(
+        MixedModel,
+        @formula(reaction ~ 1 + days + (1 | subj)),
+        data;
+        REML=false,
+        progress=false,
+    )
+
+    # Buckland result scored at a non-default sigmapenalty; its caickwargs must capture it.
+    res_smoothed = modelavg(m1, m2; weights=:smoothed, sigmapenalty=3)
+    @test res_smoothed.caickwargs.sigmapenalty == 3
+    @test res_smoothed.caickwargs.method == :auto
+    @test res_smoothed.caickwargs.hessian == :analytic
+    @test res_smoothed.caickwargs.nboot === nothing
+
+    wr_slow = getweights(res_smoothed)
+
+    # Direct :zhang fits at matching vs default sigmapenalty bracket the behaviour.
+    wr_same = modelavg(m1, m2; weights=:zhang, sigmapenalty=3).weightresult
+    wr_default = modelavg(m1, m2; weights=:zhang, sigmapenalty=1).weightresult
+
+    @test wr_slow.weights ≈ wr_same.weights atol = 1e-8
+    @test wr_slow.objective ≈ wr_same.objective atol = 1e-8
+    # The penalty enters J(w) = ‖y − μw‖² + 2σ̂²(ρᵀw) through ρ, so a different sigmapenalty
+    # gives a different objective; this is what the old default-kwargs slow path got wrong.
+    @test !isapprox(wr_slow.objective, wr_default.objective; atol=1e-6)
+end
+
 @testitem "getweights is type-stable" tags = [:level1] begin
     using MixedModels, Test
     using ConditionalAIC: modelavg, getweights, WeightResult
