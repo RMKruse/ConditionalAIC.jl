@@ -110,6 +110,24 @@ function _lambday(B::AbstractMatrix{T}, C::AbstractMatrix{T}) where {T}
     return issuccess(fac) ? fac \ C : Bsym \ C
 end
 
+# Shared ρ-assembly tail of the analytic and numeric Gaussian bias corrections. Given the
+# solved Λ̂ʸ = B⁻¹C and the reused A Wⱼ e vectors, form
+#   ρ = ρ₀ + Σⱼ Λ̂ʸ[j,:]·(A Wⱼ e) + sigmapenalty,   ρ₀ = n − tr(A)   (unweighted, R A = A).
+# Both paths reach this *identical* assembly (only the source of B and the scaling of C
+# differ upstream); factoring it guarantees the two penalties can never drift in the tail.
+function _assemble_rho(
+    A::AbstractMatrix{T},
+    Λy::AbstractMatrix{T},
+    AWje::AbstractVector{<:AbstractVector{T}},
+    sigmapenalty::Integer,
+) where {T}
+    ρ = T(size(A, 1)) - tr(A)              # ρ₀ = n − tr(R A), unweighted R A = A
+    @inbounds for j in eachindex(AWje)
+        ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
+    end
+    return ρ + T(sigmapenalty)
+end
+
 """
     dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer = 1) -> T
 
@@ -198,11 +216,7 @@ function dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer=1) where {T}
 
     Λy = _lambday(B, C)
 
-    ρ = T(n) - tr(A)                       # ρ₀ = n − tr(R A), unweighted R A = A
-    @inbounds for j in 1:s
-        ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
-    end
-    return ρ + T(sigmapenalty)
+    return _assemble_rho(A, Λy, AWje, sigmapenalty)
 end
 
 """
@@ -271,11 +285,7 @@ function dof_lmm_numeric(
 
     Λy = _lambday(B, C)
 
-    ρ = T(n) - tr(A)                       # ρ₀ = n − tr(R A), unweighted R A = A
-    @inbounds for j in 1:s
-        ρ += dot(view(Λy, j, :), AWje[j])  # Λ̂ʸ[j,:] · (A Wⱼ e)
-    end
-    return ρ + T(sigmapenalty)
+    return _assemble_rho(A, Λy, AWje, sigmapenalty)
 end
 
 """
