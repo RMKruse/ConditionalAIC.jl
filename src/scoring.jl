@@ -447,27 +447,25 @@ end
 # (`docs/math/0008 §0`); a rank-deficient design is out of scope for the search terminal.
 _terminalrank(m::TableRegressionModel) = length(coef(m))
 
-# Response family of a fitted `glm`, for terminal-scoring dispatch. `m.model` is the wrapped
-# `GeneralizedLinearModel`; its `rr.d` is the response distribution instance. GLM is exact-pinned
-# (DECISIONS 2026-05-30), so this field is stable for the supported version.
-_glmfamily(m::TableRegressionModel{<:GeneralizedLinearModel}) = m.model.rr.d
-
 # `glm` terminal: score by family, reusing the shared `_condll_by_family` map at the fitted
 # mean μ̂. df = rank + 1 (cAIC4's `(g)lm` branch), as for the Gaussian `lm`. The supported
-# families share one body; the function-barrier dispatch on `_glmfamily(m)` keeps it
-# type-stable. `m.model.rr.wts` carries the per-observation binomial trial counts (the prior
-# weights) — consumed only by the Binomial kernel, ignored by Poisson/Bernoulli. That Binomial
-# path reuses the corrected `condloglik_binomial`, the documented DEVIATION from cAIC4's
+# families share one body; the function-barrier dispatch on the family instance keeps it
+# type-stable. The family (`GLMInternals.glmfamily`) and the per-observation binomial trial counts
+# (`GLMInternals.glmpriorweights`) are the GLM-internal touchpoints, quarantined in `GLMInternals`.
+# The trial counts are consumed only by the Binomial kernel, ignored by Poisson/Bernoulli; that
+# Binomial path reuses the corrected `condloglik_binomial`, the documented DEVIATION from cAIC4's
 # defective multi-trial getcondLL (DECISIONS 2026-05-29 / 2026-05-30), exactly as the M3 GLMM
 # binomial path does.
-caic(m::TableRegressionModel{<:GeneralizedLinearModel}) = _glm_terminal(m, _glmfamily(m))
+function caic(m::TableRegressionModel{<:GeneralizedLinearModel})
+    _glm_terminal(m, GLMInternals.glmfamily(m))
+end
 
 function _glm_terminal(m::TableRegressionModel, d::Union{Poisson,Bernoulli,Binomial})
     y = response(m)
     μ = predict(m)
     T = float(eltype(y))
     ρ = T(_terminalrank(m) + 1)                       # cAIC4: df = rank + 1
-    ℓ = _condll_by_family(d, y, μ, m.model.rr.wts)
+    ℓ = _condll_by_family(d, y, μ, GLMInternals.glmpriorweights(m))
     return CAICResult{T,typeof(m)}(-2ℓ + 2ρ, ρ, ℓ, nothing, false, :terminal, :na)
 end
 
