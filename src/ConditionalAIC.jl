@@ -57,6 +57,7 @@ include("comparison.jl")     # the anocaic method (comparison table, M2.5)
 include("respec.jl")         # RESpec extract/render — the M4 RE-structure representation
 include("stepcaic_candidates.jl")  # backward/forward candidate enumeration (M4 stepwise search)
 include("stepcaic.jl")             # greedy stepwise driver + result types (M4)
+include("weightoptim.jl")    # Zhang-optimal solnp weight optimizer (R-transcription, M4.5)
 include("averaging.jl")      # modelavg — cAIC-weighted model averaging (M4.5)
 
 # ── Public surface ──────────────────────────────────────────────────────────
