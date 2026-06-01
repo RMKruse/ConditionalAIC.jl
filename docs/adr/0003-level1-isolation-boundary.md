@@ -97,3 +97,35 @@ The gated live-R job (`CAIC_LIVE_RCALL=1`) uses the same Rscript + HDF5 hand-off
 that function is pure base R and the Level-1 boundary involves no model fit. Provenance
 (the `cAIC4`, `rhdf5`, R, Julia, and `HDF5_jll` versions) is recorded in the fixture's
 `meta` group at generation time.
+
+## Addendum (2026-06-01) — the dense n×n component layout is an accepted simplification, not a defect
+
+**Status:** accepted. Records the deliberate space/time cost of the dense-component design
+this ADR establishes, so it is not re-surfaced as an undocumented bug.
+
+`src/components.jl`'s `gaussiancomponents` materialises dense `n×n` matrices — `V0inv`,
+`A` (and the intermediate `G = V₀⁻¹X`), plus one dense `n×n` `Wⱼ` per free covariance
+component (`components.jl:70–86`). For `n` in the thousands this is the package's dominant
+storage (`O(n²)`) and work (`O(n³)`) cost. This is **by design**, not an oversight:
+
+- **It is the layout this ADR isolates on.** The Level-1 boundary is `calculateGaussianBc`,
+  fed *parametrisation-neutral dense components* (see "Why this boundary" above and doc 0002
+  §6). The density is what keeps Level-1 fit-independent and θ-parametrisation-neutral; it is
+  load-bearing for the isolation, not incidental.
+- **It is a faithful port of `cAIC4`.** `getModelComponents.merMod` builds these same dense
+  `V0inv`/`A`/`Wlist`; the Julia side reproduces that layout (the `GaussianComponents`
+  docstring and field validation pin every matrix at `n×n`). Stability is not violated —
+  the construction is Woodbury + Cholesky throughout, no explicit `inv` and no `det`
+  (CLAUDE.md §9).
+- **The cost is not local to `components.jl`.** The consumer `dof_lmm` is itself dense:
+  `WA = [W * M for W in Wlist]` is an `n×n · n×n` product per component (`dof_lmm.jl:184`),
+  and `traceprod` runs over `s²` pairs. A vector-apply rewrite of `components.jl` alone would
+  not change the asymptotics; only a low-rank reformulation of the **whole** Greven–Kneib
+  kernel would.
+
+**Future work (deferred, not silent).** `Wⱼ = Zₜ Dⱼ Zₜᵀ` is genuinely low rank and
+`A`/`V₀⁻¹` carry Woodbury structure, so an `O(n·q²)` apply-to-vectors reformulation of the
+df kernel is mathematically available. It is a separate, R-reference-re-validated
+performance milestone (it changes numerical results' *path*, so §7's ritual and a Level-1
+re-check apply), explicitly out of scope for the current dense Level-1 design — recorded here
+so the dense form reads as a known, accepted trade-off rather than a missed optimisation.
