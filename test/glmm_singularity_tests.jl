@@ -131,7 +131,7 @@ end
     @test r.dof == 1.0              # rank(X) = 1 for intercept-only; no +1 σ-penalty
     @test !r.refit                  # full-singularity path does not refit
     @test r.reducedmodel === nothing
-    @test r.method == :auto
+    @test r.method == :steinian     # :auto resolves before storage (mirrors the LMM collapse)
     @test r.bsource == :na
     @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-10  # cAIC identity
 end

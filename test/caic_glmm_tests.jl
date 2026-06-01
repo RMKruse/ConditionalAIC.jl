@@ -32,7 +32,7 @@
 
     r = caic(m)
     @test r isa CAICResult{Float64,<:GeneralizedLinearMixedModel}
-    @test r.method == :auto
+    @test r.method == :steinian   # :auto resolves to the analytic correction (Poisson Chen–Stein)
     @test r.bsource == :na
     @test !r.refit
     @test r.reducedmodel === nothing
@@ -115,7 +115,7 @@ end
 
     r = caic(m)
     @test r isa CAICResult{Float64,<:GeneralizedLinearMixedModel}
-    @test r.method == :auto
+    @test r.method == :steinian   # :auto resolves to the analytic correction (Bernoulli Efron Steinian)
     @test r.bsource == :na
     @test !r.refit
     @test r.reducedmodel === nothing
