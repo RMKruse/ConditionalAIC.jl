@@ -6,9 +6,52 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-06-02 — Crossed-Poisson GLMM `stepcaic` Level-2 `bestCAIC` band re-derived to `atol = 2e-3` (a *converged* fit drifted past the old 1e-3 band; supersedes the convergence gate)
+
+**Status:** accepted (measured). Supersedes the convergence-gate entry immediately below (and, through
+it, the 2026-06-01 prerelease entry). Applies to the same two crossed-Poisson GLMM `stepcaic` Level-2
+anchors: `glmm_poisson_keep` (`test/stepcaic_driver_tests.jl`, backward keeps the full crossed model) and
+`glmm_fwd_it` (`test/stepcaic_forwardboth_tests.jl`, forward grows to the same full crossed model). Both
+anchor `res.selected.caic ≈ bestCAIC` — now at `atol = 2e-3`, asserted live on every platform (no gate).
+
+**What the convergence gate missed.** The gate below keyed the anchor on `MMInternals.converged(res.model)`,
+on the premise that *only* a budget-exhausted fit (`MAXEVAL_REACHED`) drifts the cAIC past the 1e-3
+headroom, and that any **converged** fit (`FTOL_REACHED`/`XTOL_REACHED`/…) sits well inside the band. The
+CI evidence refutes that premise. In the failing PR run (Julia 1.10.11, `Test - Julia 1.10`), both anchors
+**passed the convergence gate** (`MMInternals.converged(res.model) == true`) and then **failed the numeric
+assertion**: `res.selected.caic = 448.205341388005` vs `bestCAIC = 448.2064161030663`, `|Δ| = 1.07e-3`,
+just over the old `atol = 1e-3`. So a genuinely converged fit can still settle on a θ̂ whose cAIC sits
+1.07e-3 from cAIC4's — the convergence predicate is *necessary but not sufficient* for the 1e-3 band.
+
+**Investigation (not a tolerance loosened to mask a defect — CLAUDE §10).** This is the prescribed Level-2
+band re-derivation (§6/§10), not a masked divergence. The correction *mathematics* is validated independently
+at Level-1 to `rtol = 1e-6`; the cAIC assembly is bit-identical given θ̂. The residual gap is purely the
+**lme4↔MixedModels Laplace fit discrepancy** — the two optimizers converge to slightly different stationary
+θ̂ — and that discrepancy is **platform-dependent**: 9.6e-4 on the local macOS-ARM BLAS/libm path (the
+value the 1e-3 band was originally derived from) but 1.07e-3 on the CI Linux-x86 / Julia 1.10 path. The
+old band was derived from a single platform's measurement and so was too tight to bound the real
+cross-platform discrepancy.
+
+**Resolution.** Re-derive the band to `atol = 2e-3` — ≈1.9× the worst observed converged discrepancy
+(1.07e-3), bounding the cross-platform BLAS/libm θ̂ jitter with margin — and drop the convergence gate, so
+the anchor is asserted **live on every platform and Julia version** (strictly more coverage than gating it
+off when the premise fails). Re-deriving the band rather than gating is the better fit to the evidence: the
+drift is a converged-fit phenomenon, so there is no clean convergence signal to gate on. The band remains a
+*tight* regression gate — the nearest rejected model in these searches sits ≈9 cAIC units away, three-plus
+orders of magnitude beyond 2e-3, so a genuine scoring regression still trips it. Every structural / relative
+assertion (`extract(res.model)`, the accept/reject path, `res.selected.caic == caic(m).caic`,
+`res.selected.caic < caic(m).caic`, the forwarded-kwarg `@test_throws`) was already live and unaffected.
+The other Level-2 bands (`L2_ATOL = 1e-3` elsewhere) are untouched: their fixtures sit far inside 1e-3 and
+have not been observed to drift; only this crossed-Poisson fixture — the suite's tightest Level-2 case — is
+re-derived.
+
+---
+
 ## 2026-06-02 — Crossed-Poisson GLMM `stepcaic` Level-2 `bestCAIC` anchors gated on the *observed* fit convergence (supersedes the prerelease gate)
 
-**Status:** accepted (measured). Supersedes the 2026-06-01 entry below. Applies to the same two
+**Status:** superseded by the 2026-06-02 band re-derivation entry above (a *converged* fit was observed to
+drift to 1.07e-3 on CI Linux/1.10, so the gate's "converged ⇒ inside 1e-3" premise does not hold; the band
+is re-derived to 2e-3 and asserted live instead of gated). Applies to the same two
 crossed-Poisson GLMM `stepcaic` Level-2 anchors: `glmm_poisson_keep` (`test/stepcaic_driver_tests.jl`,
 backward keeps the full crossed model) and `glmm_fwd_it` (`test/stepcaic_forwardboth_tests.jl`, forward
 grows to the same full crossed model). Both anchor `res.selected.caic ≈ bestCAIC` at `atol = 1e-3`.

@@ -45,6 +45,22 @@ struct CAICResult{T<:AbstractFloat,M<:RegressionModel}
     refit::Bool
     method::Symbol
     bsource::Symbol
+
+    # Explicit inner constructor binding both type parameters. This suppresses the
+    # default outer constructor `CAICResult(caic, …, reducedmodel, …)`, whose `M` is
+    # unbound whenever `reducedmodel` is `nothing` (it appears only inside
+    # `Union{Nothing,M}`). Every call site already spells `CAICResult{T,M}(…)`.
+    function CAICResult{T,M}(
+        caic::T,
+        dof::T,
+        condloglik::T,
+        reducedmodel::Union{Nothing,M},
+        refit::Bool,
+        method::Symbol,
+        bsource::Symbol,
+    ) where {T<:AbstractFloat,M<:RegressionModel}
+        return new{T,M}(caic, dof, condloglik, reducedmodel, refit, method, bsource)
+    end
 end
 
 """
