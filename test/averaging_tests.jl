@@ -1144,8 +1144,12 @@ end
             live_p = h5read(tmp, "$s/prediction")
             comm_w = h5read(committed, "$s/weights")
             live_w = h5read(tmp, "$s/weights")
+            # The prediction ŷ^MA is the stable functional (DECISIONS 2026-05-31) — it survives
+            # at machine precision. The weights come from cAIC4's Zhang `.weightOptim` optimizer
+            # (modelAvg(opt=TRUE)), so committed (macOS-ARM) vs fresh (Linux) agree only to the
+            # optimiser's cross-platform floor (~1e-6 rel), not 1e-8. Band: DECISIONS 2026-06-02.
             @test live_p ≈ comm_p rtol = 1e-8 atol = 1e-8
-            @test live_w ≈ comm_w rtol = 1e-8 atol = 1e-8
+            @test live_w ≈ comm_w rtol = 1e-5 atol = 1e-7
         end
     else
         @info "Skipping predictMA Level-2 live-RCall re-validation (set CAIC_LIVE_RCALL=1)"
