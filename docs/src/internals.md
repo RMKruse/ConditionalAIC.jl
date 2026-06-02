@@ -63,3 +63,12 @@ All access to `MixedModels.jl` internals is confined to this module.
 ```@autodocs
 Modules = [ConditionalAIC.MMInternals]
 ```
+
+## GLM.jl internals quarantine
+
+All access to `GLM.jl` internals — for the `lm`/`glm` terminal a backward
+`stepcaic` search reaches — is confined to this module.
+
+```@autodocs
+Modules = [ConditionalAIC.GLMInternals]
+```

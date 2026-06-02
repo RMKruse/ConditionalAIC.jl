@@ -98,6 +98,36 @@ that function is pure base R and the Level-1 boundary involves no model fit. Pro
 (the `cAIC4`, `rhdf5`, R, Julia, and `HDF5_jll` versions) is recorded in the fixture's
 `meta` group at generation time.
 
+## Addendum (2026-06-02) — the R HDF5 package is selected per platform (`hdf5r` on Linux CI, `rhdf5` on macOS-ARM)
+
+**Status:** accepted. Updates the 2026-05-27 addendum above; it does not reverse it. The neutral
+hand-off is still HDF5 and the Julia side is still `HDF5.jl` — only *which R package writes the file*
+now depends on the platform, chosen at runtime.
+
+The 2026-05-27 addendum standardised on `rhdf5` because `hdf5r` would not build on macOS-ARM. That
+holds — but `rhdf5`'s Bioconductor build then broke in the *other* direction: on the `ubuntu-24.04` CI
+image, `Rhdf5lib 2.0.0` (the bundled-HDF5 dependency, Bioc 3.23) fails its CMake configure step
+(`failed to configure the HDF5 library with CMake`), so `rhdf5` cannot install and the gated live-R job
+errors before any fixture is written. Neither package builds everywhere: `hdf5r` fails on macOS-ARM,
+`rhdf5` (currently) fails on the Linux runner.
+
+**Decision.** A small shim, `test/fixture_io.R`, detects the available package — **`hdf5r` first**
+(installed as a Posit Package Manager binary against system `libhdf5` on the Linux CI runner; robust, no
+source build), **`rhdf5` as the macOS-ARM fallback** (the only one that builds there) — and exposes the
+identical function surface the generators use (`h5createFile` / `h5createGroup` / `h5write` / `h5read` /
+`h5delete` / `h5closeAll` / `h5ls`). Under `rhdf5` those are rhdf5's own exports (a literal passthrough,
+so the local path is byte-for-byte unchanged); under `hdf5r` they are thin `H5File` wrappers with the
+same semantics. Each `generate_fixtures*.R` now `source()`s the shim instead of `library(rhdf5)`, and the
+provenance field is the backend-agnostic `meta/hdf5_backend` (e.g. `"hdf5r 1.3.x"` / `"rhdf5 2.x"`).
+
+**Orientation parity.** Both packages and `HDF5.jl` follow the same convention (R-visible dims are the
+reverse of the on-disk C dims), so a matrix round-trips identically across all three. This was verified
+against `HDF5.jl` for the non-symmetric matrices that actually cross the boundary on the R *read* path —
+`Ystar`/`Yhatstar` (`bootstrap_level1.h5`) and `mu` (`zhang_weights_level1.h5`): under `rhdf5`, element
+`[i,j]` matches `HDF5.jl` exactly. The `hdf5r` path is exercised end-to-end by the live-R CI job, whose
+regenerate-and-compare step fails *loudly* on any orientation/shape mismatch rather than emitting a
+silently-wrong reference value.
+
 ## Addendum (2026-06-01) — the dense n×n component layout is an accepted simplification, not a defect
 
 **Status:** accepted. Records the deliberate space/time cost of the dense-component design

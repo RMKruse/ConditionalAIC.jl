@@ -19,6 +19,7 @@ makedocs(;
         ConditionalAIC.DofGLMM,
         ConditionalAIC.Components,
         ConditionalAIC.MMInternals,
+        ConditionalAIC.GLMInternals,
     ],
     authors="RMKruse <rene.marcel.kruse@protonmail.com>",
     sitename="ConditionalAIC.jl",

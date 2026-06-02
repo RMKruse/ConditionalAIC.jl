@@ -272,6 +272,51 @@ end
 # Flip the working direction (`R/stepcAIC.R`'s `ifelse(direction=="forward","backward","forward")`).
 _flip(d::Symbol) = d === :forward ? :backward : :forward
 
+# The mutable state of the greedy walk in [`_runstepcaic`]: the working direction, the two
+# `both`-cascade latches (`improvementinboth`/`equaltolaststep`), the incumbent (its `RESpec`,
+# fitted model, score, and cAIC), and the immutable `dirwasboth` flag. Holding the walk variables
+# in one struct lets the repeated `both`-turn and accept transitions ([`_flipturn!`], [`_commit!`])
+# mutate them in one place rather than reassigning a scatter of locals. `M`/`T` match the driver's
+# model and float types; not a hot kernel, but concretely typed so the walk stays type-stable.
+mutable struct WalkState{T<:AbstractFloat,M<:MixedModel}
+    workdir::Symbol
+    improvementinboth::Bool
+    equaltolaststep::Bool
+    cur_spec::RESpec
+    cur_model::M
+    cur_result::CAICResult{T,M}
+    cAICofMod::T
+    dirwasboth::Bool
+end
+
+# The `both`-run turn transition (`R/stepcAIC.R`'s direction toggle): flip the working direction
+# and clear the improvement latch. This single move is taken at every `both` flip site — the
+# exhausted-neighbourhood branches (`:565–571`, the drop-original `minCAIC == Inf` arc) and the
+# non-improving branch F — so it lives here once.
+function _flipturn!(s::WalkState)
+    s.workdir = _flip(s.workdir)
+    s.improvementinboth = false
+    return nothing
+end
+
+# Adopt the best candidate as the new incumbent (the accepting branches C/D of `cAIC4`'s decision
+# cascade): take its spec/model/result, set the incumbent cAIC to the accepted score, set the
+# both-direction improvement latch, and flip the working direction on a `both` run. The only
+# divergence between the two accepting branches is `improvedboth` — `true` for the improving or
+# first-tie move (branch C), `false` for the plateau's second accepted move (branch D, which
+# consumes the latch).
+function _commit!(
+    s::WalkState{T,M}, spec::RESpec, model::M, result::CAICResult{T,M}, improvedboth::Bool
+) where {T,M}
+    s.cur_spec = spec
+    s.cur_model = model
+    s.cur_result = result
+    s.cAICofMod = result.caic
+    s.improvementinboth = improvedboth
+    s.dirwasboth && (s.workdir = _flip(s.workdir))
+    return nothing
+end
+
 # The model-family-agnostic driver shared by the `LinearMixedModel` and
 # `GeneralizedLinearMixedModel` `stepcaic` methods, covering all three directions (`:backward`,
 # `:forward`, `:both`) — the faithful port of `cAIC4`'s `stepCAIC` decision cascade
@@ -304,16 +349,19 @@ function _runstepcaic(
 ) where {T,M<:MixedModel,F,G,H,C}
     savedmodels = options.savedmodels
     skipnonconverged = options.skipnonconverged
-    dirwasboth = options.direction === :both
-    # Working direction: `both`/`forward` start forward (`:389`); `backward` is the §4.1 skeleton.
-    workdir = options.direction in (:both, :forward) ? :forward : :backward
-    improvementinboth = true
-    equaltolaststep = false
 
-    cur_spec = extract(m)
-    cur_model = m
+    # Working direction: `both`/`forward` start forward (`:389`); `backward` is the §4.1 skeleton.
     cur_result = score(m)
-    cAICofMod = cur_result.caic
+    state = WalkState{T,M}(
+        options.direction in (:both, :forward) ? :forward : :backward,  # workdir
+        true,                                                           # improvementinboth
+        false,                                                          # equaltolaststep
+        extract(m),                                                     # cur_spec
+        m,                                                              # cur_model
+        cur_result,                                                     # cur_result
+        cur_result.caic,                                                # cAICofMod
+        options.direction === :both,                                    # dirwasboth
+    )
 
     path = StepRecord{T}[]
 
@@ -344,13 +392,13 @@ function _runstepcaic(
 
     stepsleft = options.steps
     while stepsleft > 0
-        cands = gencands(cur_spec, workdir)
+        cands = gencands(state.cur_spec, state.workdir)
 
         # Forward-terminal arc (`:435`): forward enumeration exhausted → return the incumbent as
         # best, *before* scoring. Forward never descends to the `lm`/`glm` terminal (it only grows).
         # Fires regardless of `dirwasboth`, so a `both` run whose forward turn yields nothing stops.
-        if workdir === :forward && isempty(cands)
-            return result(cur_result, cur_model, _savedkey(cur_spec))
+        if state.workdir === :forward && isempty(cands)
+            return result(state.cur_result, state.cur_model, _savedkey(state.cur_spec))
         end
 
         # Backward enumeration exhausted: at the cnms single-direction node with NO keep floor the
@@ -358,12 +406,11 @@ function _runstepcaic(
         # a finite cAIC). Otherwise the neighbourhood is empty (`minCAIC == Inf`): a `both` run flips
         # direction (`:565–571` branch A), a non-`both` run stops keeping the incumbent.
         terminaldescent = false
-        if workdir === :backward && isempty(cands)
-            if keep === nothing && _totaldirections(cur_spec) == 1
+        if state.workdir === :backward && isempty(cands)
+            if keep === nothing && _totaldirections(state.cur_spec) == 1
                 terminaldescent = true
-            elseif dirwasboth
-                workdir = _flip(workdir)
-                improvementinboth = false
+            elseif state.dirwasboth
+                _flipturn!(state)
                 continue
             else
                 break
@@ -376,12 +423,12 @@ function _runstepcaic(
             termmodel, termresult = terminalfit()
             termcaic = termresult.caic
             remember!(_TERMINALKEY, termresult)
-            accepted = termcaic <= cAICofMod
+            accepted = termcaic <= state.cAICofMod
             push!(
                 path,
                 StepRecord{T}(
-                    workdir,
-                    cAICofMod,
+                    state.workdir,
+                    state.cAICofMod,
                     ScoredCandidate{T}[ScoredCandidate{T}(
                         nothing, termcaic, termresult.dof
                     )],
@@ -393,9 +440,8 @@ function _runstepcaic(
             # terminal does not improve: a `both` run with a prior successful turn flips once more
             # (branch F), else stop keeping the incumbent (branch G).
             accepted && return result(termresult, termmodel, _TERMINALKEY)
-            if dirwasboth && improvementinboth
-                workdir = _flip(workdir)
-                improvementinboth = false
+            if state.dirwasboth && state.improvementinboth
+                _flipturn!(state)
                 continue
             else
                 break
@@ -403,13 +449,18 @@ function _runstepcaic(
         end
 
         # `mergeChanges` drop-original: discard every candidate equal to the current model before
-        # scoring (the keep re-add / a no-op enlargement can reconstitute the unchanged incumbent).
-        cands = RESpec[c for c in cands if c != cur_spec]
+        # scoring (the backward keep re-add / a no-op enlargement can reconstitute the unchanged
+        # incumbent). Equality is the canonical term-multiset (`_savedkey`/`_canonkey`,
+        # docs/math/0008 §2.1) — R's drop-original compares `lapply(cnms, sort)`, the forward
+        # enumerator (`:554`) already drops on this key, and `savedmodels` keys models on it. An
+        # order-sensitive `RESpec ==` would miss a reconstitution whose groups/directions come back
+        # reordered (`_backwardstep` appends the reduced term last; `_checkres` sorts directions).
+        curkey = _savedkey(state.cur_spec)
+        cands = RESpec[c for c in cands if _savedkey(c) != curkey]
         if isempty(cands)
             # `minCAIC == Inf` (branch A): flip in `both`, else stop keeping the incumbent.
-            if dirwasboth
-                workdir = _flip(workdir)
-                improvementinboth = false
+            if state.dirwasboth
+                _flipturn!(state)
                 continue
             else
                 break
@@ -434,19 +485,19 @@ function _runstepcaic(
 
         bestidx = argmin(caics)
         minCAIC = caics[bestidx]
-        improves = minCAIC <= cAICofMod
+        improves = minCAIC <= state.cAICofMod
         single = stepsleft == 0 || length(cands) == 1
 
         # `accepted` for the path record: the best candidate becomes (or would become) the incumbent
         # this step (branches B/C/D) vs. rejected (branches E/F/G). The mixed-candidate set never
         # carries the `lm`/`glm` terminal (`allNA`/`bestIsGLM` are false here), so branch B is unreachable
         # on this path — its terminal/keep-minimal arcs are the `terminaldescent`/single-candidate stops.
-        accepted = improves && (!equaltolaststep || improvementinboth)
+        accepted = improves && (!state.equaltolaststep || state.improvementinboth)
         push!(
             path,
             StepRecord{T}(
-                workdir,
-                cAICofMod,
+                state.workdir,
+                state.cAICofMod,
                 ScoredCandidate{T}[
                     ScoredCandidate{T}(cands[i], caics[i], results[i].dof) for
                     i in eachindex(cands)
@@ -456,39 +507,29 @@ function _runstepcaic(
             ),
         )
 
-        if improves && !equaltolaststep
-            # Branch C: accept the improving (or first-tie) move. A tie latches `equaltolaststep`.
-            minCAIC == cAICofMod && (equaltolaststep = true)
+        if improves && !state.equaltolaststep
+            # Branch C: accept the improving (or first-tie) move. A tie latches `equaltolaststep`
+            # (read against the pre-commit incumbent cAIC), and `single` returns before committing.
+            minCAIC == state.cAICofMod && (state.equaltolaststep = true)
             single &&
                 return result(results[bestidx], models[bestidx], _savedkey(cands[bestidx]))
-            cur_spec = cands[bestidx]
-            cur_model = models[bestidx]
-            cur_result = results[bestidx]
-            cAICofMod = minCAIC
-            improvementinboth = true
-            dirwasboth && (workdir = _flip(workdir))
-        elseif improves && equaltolaststep && improvementinboth
+            _commit!(state, cands[bestidx], models[bestidx], results[bestidx], true)
+        elseif improves && state.equaltolaststep && state.improvementinboth
             # Branch D: the plateau's second accepted move (consumes `improvementinboth`).
-            cur_spec = cands[bestidx]
-            cur_model = models[bestidx]
-            cur_result = results[bestidx]
-            cAICofMod = minCAIC
-            improvementinboth = false
-            dirwasboth && (workdir = _flip(workdir))
-        elseif !improves && single && !dirwasboth
+            _commit!(state, cands[bestidx], models[bestidx], results[bestidx], false)
+        elseif !improves && single && !state.dirwasboth
             # Branch E: no improvement and out of moves (non-`both`) — stop, keep incumbent.
             break
-        elseif !improves && dirwasboth && improvementinboth
+        elseif !improves && state.dirwasboth && state.improvementinboth
             # Branch F: a `both` non-improving turn after a prior success — flip and try once more.
-            workdir = _flip(workdir)
-            improvementinboth = false
+            _flipturn!(state)
         else
             # Branch G: stop, keep the incumbent.
             break
         end
     end
 
-    return result(cur_result, cur_model, _savedkey(cur_spec))
+    return result(state.cur_result, state.cur_model, _savedkey(state.cur_spec))
 end
 
 """

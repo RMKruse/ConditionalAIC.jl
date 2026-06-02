@@ -21,7 +21,7 @@
 #
 # Usage:  Rscript test/generate_fixtures_zhang_level1.R
 
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")

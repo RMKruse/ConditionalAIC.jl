@@ -18,8 +18,8 @@
 # The committed cAIC4 v1.1 lines this matches are reproduced verbatim in the comment
 # above `bootBC_arithmetic` below.
 #
-# HDF5 reader: `rhdf5` — same as `generate_fixtures.R`; the ADR-0003 addendum
-# (2026-05-27) covers the choice.
+# HDF5 I/O via `test/fixture_io.R` (hdf5r on Linux CI, rhdf5 on macOS-ARM), same as
+# `generate_fixtures.R`; the ADR-0003 addenda (2026-05-27, 2026-06-02) cover the choice.
 #
 # Env vars:
 #   CAIC4_SRC  path to the cAIC4 source tree (default /private/tmp/cAIC4_src)
@@ -27,7 +27,7 @@
 #
 # Usage:  Rscript test/generate_fixtures_bootstrap.R
 
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")
@@ -94,7 +94,7 @@ for (name in case_names) {
 }
 
 put("meta/cAIC4_version", caic4_version)
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version", R.version.string)
 
 cat(sprintf("Wrote rho_ref for %d case(s) to %s (cAIC4 %s).\n",

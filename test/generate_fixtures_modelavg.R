@@ -25,7 +25,7 @@
 # Usage:  Rscript test/generate_fixtures_modelavg.R
 
 suppressMessages({
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
   library(lme4)
 })
 

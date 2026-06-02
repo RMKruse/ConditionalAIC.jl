@@ -49,6 +49,7 @@ include("numerics.jl")
 include("loglik.jl")
 include("dof_lmm.jl")        # defines DofLMM.GaussianComponents (used by Components)
 include("mm_internals.jl")   # QUARANTINE: the only MixedModels-internals touchpoint
+include("glm_internals.jl")  # QUARANTINE: the only GLM.jl-internals touchpoint (lm/glm terminal)
 include("dof_glmm.jl")       # GLMM df routes: Poisson Chen-Stein + Bernoulli Efron (M3)
 include("components.jl")     # fit-extracted arrays → GaussianComponents (uses ..DofLMM)
 include("types.jl")          # CAICResult, AnocaicTable (public result types)

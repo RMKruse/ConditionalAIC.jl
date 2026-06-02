@@ -128,6 +128,24 @@ function _assemble_rho(
     return ρ + T(sigmapenalty)
 end
 
+# Shared spine of the analytic and numeric Gaussian bias corrections. Computes the REML/ML
+# degrees `nθ` and the reused `A Wⱼ e` vectors, defers the `(B, C)` pair to `buildBC` (the only
+# divergence — the C-row formula and the B-source), then solves `Λ̂ʸ = B⁻¹C` (factorisation, no
+# inverse) and assembles ρ. Both [`dof_lmm`](@ref) and [`dof_lmm_numeric`](@ref) route through
+# here, so the solve and the ρ tail exist once and the two penalties cannot drift outside `buildBC`.
+function _dof_lmm_spine(
+    buildBC::F, c::GaussianComponents{T}, sigmapenalty::Integer
+) where {T,F}
+    e, A, Wlist = c.e, c.A, c.Wlist
+    n = length(e)
+    p = size(c.X, 2)
+    nθ = c.isREML ? (n - p) : n            # REML uses n − p; ML uses n
+    AWje = [A * (W * e) for W in Wlist]    # A Wⱼ e — reused by C, B's cross term, and ρ
+    B, C = buildBC(nθ, AWje)
+    Λy = _lambday(B, C)
+    return _assemble_rho(A, Λy, AWje, sigmapenalty)
+end
+
 """
     dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer = 1) -> T
 
@@ -191,17 +209,21 @@ true
 ```
 """
 function dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer=1) where {T}
+    return _dof_lmm_spine(c, sigmapenalty) do nθ, AWje
+        _analytic_bc(c, nθ, AWje)
+    end
+end
+
+# The analytic `(B, C)`: the closed-form Greven–Kneib Hessian B — the Fisher trace term
+# `tr(Wⱼ M Wₖ M)` (via `traceprod`, no materialised product), the residual-quadratic square, and
+# the quartic cross term `eᵀ Wₖ A Wⱼ e` — together with the analytic cross-product C, in one
+# j-loop. `M = A` (REML) or `V₀⁻¹` (ML). The reused `A Wⱼ e` vectors come from the spine.
+function _analytic_bc(c::GaussianComponents{T}, nθ::Int, AWje) where {T}
     e, A, Wlist, eWe, tye = c.e, c.A, c.Wlist, c.eWelist, c.tye
     n = length(e)
     s = length(Wlist)
-    p = size(c.X, 2)
-
     M = c.isREML ? A : c.V0inv            # WAⱼ = Wⱼ M : REML uses A, ML uses V₀⁻¹
-    nθ = c.isREML ? (n - p) : n
-
-    WA = [W * M for W in Wlist]            # the only materialised products (reused over k)
-    AWje = [A * (W * e) for W in Wlist]    # A Wⱼ e — reused by C, B's cross term, and ρ
-
+    WA = [W * M for W in Wlist]           # the only materialised products (reused over k)
     C = Matrix{T}(undef, s, n)
     B = Matrix{T}(undef, s, s)
     @inbounds for j in 1:s
@@ -213,10 +235,7 @@ function dof_lmm(c::GaussianComponents{T}; sigmapenalty::Integer=1) where {T}
             B[j, k] = B[k, j] = traceterm + sqterm + quartic
         end
     end
-
-    Λy = _lambday(B, C)
-
-    return _assemble_rho(A, Λy, AWje, sigmapenalty)
+    return B, C
 end
 
 """
@@ -268,24 +287,27 @@ for REML), matching the objective the optimiser differentiates.
 function dof_lmm_numeric(
     c::GaussianComponents{T}, B::AbstractMatrix{T}; sigmapenalty::Integer=1
 ) where {T}
-    e, A, Wlist, eWe, tye = c.e, c.A, c.Wlist, c.eWelist, c.tye
-    n = length(e)
-    s = length(Wlist)
-    p = size(c.X, 2)
+    s = length(c.Wlist)
     size(B) == (s, s) ||
         throw(ArgumentError("B must be $s×$s (s = length(Wlist)); got $(size(B))"))
+    return _dof_lmm_spine(c, sigmapenalty) do nθ, AWje
+        _numeric_c(c, B, nθ, AWje)
+    end
+end
 
-    nθ = c.isREML ? (n - p) : n            # np in calculateGaussianBc's analytic=FALSE branch
-    AWje = [A * (W * e) for W in Wlist]    # A Wⱼ e — (A Wⱼ e)ᵀ = eᵀWⱼA; reused by C and ρ
-
+# The numeric `(B, C)`: B is supplied externally (numerically differentiated upstream); only the
+# rescaled `analytic = FALSE` cross-product C is formed here, using eᵀWⱼA = (A Wⱼ e)ᵀ (both A and
+# Wⱼ symmetric). The external B is returned unchanged alongside C so the spine's solve and ρ
+# assembly are shared with the analytic path. `nθ` is `np` in the `analytic = FALSE` branch.
+function _numeric_c(c::GaussianComponents{T}, B::AbstractMatrix{T}, nθ::Int, AWje) where {T}
+    e, eWe, tye = c.e, c.eWelist, c.tye
+    n = length(e)
+    s = length(c.Wlist)
     C = Matrix{T}(undef, s, n)
     @inbounds for j in 1:s
         C[j, :] = (2 * nθ / tye) .* (AWje[j] .- (eWe[j] / tye) .* e)
     end
-
-    Λy = _lambday(B, C)
-
-    return _assemble_rho(A, Λy, AWje, sigmapenalty)
+    return B, C
 end
 
 """

@@ -72,10 +72,15 @@ through the search machinery (`caic`, `CAICResult`, `StepcaicResult`).
   `(g)lm` AIC `cAIC4` uses at the terminal. It is validated against `cAIC4`'s `cAIC(lm)` /
   `cAIC(glm)` output directly (Level-2, the terminal is a deterministic closed form so the band
   is the fit-discrepancy band of the underlying `lm`/`glm` fit).
-- Fitting the terminal touches **no** `MixedModels` internals (public `GLM.jl` + StatsModels
-  formula API), so the `mm_internals.jl` quarantine table is unchanged by this decision. (The
-  formula → `RESpec` extraction that *interprets* MixedModels RE-term types is a separate
-  quarantine concern, tracked in `docs/math/0008`.)
+- Fitting the terminal touches **no** `MixedModels` internals, so the `mm_internals.jl`
+  quarantine table is unchanged by this decision. (The formula → `RESpec` extraction that
+  *interprets* MixedModels RE-term types is a separate quarantine concern, tracked in
+  `docs/math/0008`.) Terminal *scoring* is almost entirely on `GLM.jl`'s public surface
+  (`response`/`predict`/`deviance`/`coef` + the `LinearModel`/`GeneralizedLinearModel` types),
+  with **two** exceptions that reach into a fitted `glm`'s internal `GlmResp` — the response
+  family (`m.model.rr.d`) and the prior weights (`m.model.rr.wts`). Those are quarantined in the
+  `GLMInternals` submodule (`src/glm_internals.jl`), the `GLM.jl` analogue of `MMInternals`, with
+  its own exact-pin internal-access table (DECISIONS 2026-06-01).
 - `StepcaicResult{T}` returns the actual fitted terminal model (parity with `cAIC4`'s
   `finalModel`); the k-best vector is therefore heterogeneous (`Vector{CAICResult{T}}` with an
   abstract model slot). This is a **deliberate, documented exception** to CLAUDE.md §4's

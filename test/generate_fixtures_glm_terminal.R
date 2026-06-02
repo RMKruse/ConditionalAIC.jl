@@ -22,12 +22,12 @@
 # source. The `lm`/`glm` branch re-extracts the response from the model call, so every fit is
 # given an explicit `data =` frame.
 #
-# HDF5 writer: `rhdf5`. Env var FIXTURE overrides the output path.
+# HDF5 I/O via `test/fixture_io.R` (hdf5r/rhdf5). Env var FIXTURE overrides the output path.
 #
 # Usage:  Rscript test/generate_fixtures_glm_terminal.R
 
 suppressMessages({
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
   library(cAIC4)
 })
 
@@ -149,7 +149,7 @@ cat(sprintf(
 
 h5createGroup(fixture, "meta")
 h5write(caic4_version, fixture, "meta/cAIC4_version")
-h5write(as.character(packageVersion("rhdf5")), fixture, "meta/rhdf5_version")
+h5write(fixture_hdf5_backend(), fixture, "meta/hdf5_backend")
 h5write(R.version.string, fixture, "meta/R_version")
 
 cat(sprintf(

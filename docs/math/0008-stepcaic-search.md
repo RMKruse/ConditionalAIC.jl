@@ -451,9 +451,10 @@ repeat (at most `steps` times):
         if keep is nothing and incumbent is a single random intercept:
             cands ← {lm/glm terminal node}          # §0.1 terminal descent (only with NO keep floor)
         else:  break (stop; keep incumbent)         # exhausted neighbourhood / keep floor reached
-    cands ← [c for c in cands if c ≠ incumbent.spec]   # mergeChanges drop-original: backwardStep's keep
-    if isempty(cands):  break                          #   re-add can reconstitute the unchanged model;
-                                                       #   an emptied neighbourhood is the minCAIC==Inf arc
+    cands ← [c for c in cands if canonkey(c) ≠ canonkey(incumbent.spec)]   # mergeChanges drop-original:
+    if isempty(cands):  break                          #   backwardStep's keep re-add can reconstitute the
+                                                       #   unchanged model (reordered — §2.1 canonical key,
+                                                       #   not order-sensitive ==); emptied ⇒ minCAIC==Inf arc
     scored   ← [ (c, score(render+fit c)) for c in cands ]
     bestidx  ← argmin caic over scored          # which.min(aicTab$caic)
     minCAIC  ← scored[bestidx].caic             # (Inf if cands empty — handled above)

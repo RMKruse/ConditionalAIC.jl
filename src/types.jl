@@ -18,13 +18,19 @@ The fields are the public, typed accessors:
   `nothing` when the fit was non-singular and scored as given (always `nothing` for the
   never-singular `lm`/`glm` terminal).
 - `refit::Bool` — whether scoring was performed on a refitted reduced model.
-- `method::Symbol` — the degrees-of-freedom **method** actually used (provenance), e.g.
-  `:steinian`.
-- `bsource::Symbol` — the Hessian **B-source** actually used (provenance), e.g.
-  `:analytic`.
+- `method::Symbol` — the degrees-of-freedom **method** actually used (provenance), one of
+  the closed set `:steinian` | `:bootstrap` | `:terminal`. `:steinian` is the analytic
+  covariance-penalty correction (Greven–Kneib for the LMM; the family-dispatched Stein-type
+  df — Poisson Chen–Stein / Bernoulli Efron — for the GLMM); `:bootstrap` the
+  parametric/conditional bootstrap penalty; `:terminal` the deterministic `(g)lm` terminal.
+- `bsource::Symbol` — the Hessian **B-source** actually used (provenance), one of
+  `:analytic` | `:forwarddiff` | `:finitediff` | `:na` (`:na` whenever no Hessian B is
+  formed — every `:bootstrap` and `:terminal` result, and the GLMM paths).
 
-`method`/`bsource` record what was *resolved and run* (e.g. `method = :auto` resolves to
-`:steinian` for the Gaussian family), so candidates can be checked for consistent scoring.
+`method`/`bsource` record what was *resolved and run* — the request-level `method = :auto`
+never appears, resolving to `:steinian` on both the Gaussian and the analytic GLMM paths — so
+candidates can be checked for consistent scoring. These two closed Symbol domains are the
+stable provenance surface; only values from the sets above are ever stored.
 
 The model bound is `M <: RegressionModel` (the common supertype of `LinearMixedModel`,
 `GeneralizedLinearMixedModel`, and the `GLM.jl` `lm`/`glm` terminal a backward `stepcaic`
@@ -39,6 +45,22 @@ struct CAICResult{T<:AbstractFloat,M<:RegressionModel}
     refit::Bool
     method::Symbol
     bsource::Symbol
+
+    # Explicit inner constructor binding both type parameters. This suppresses the
+    # default outer constructor `CAICResult(caic, …, reducedmodel, …)`, whose `M` is
+    # unbound whenever `reducedmodel` is `nothing` (it appears only inside
+    # `Union{Nothing,M}`). Every call site already spells `CAICResult{T,M}(…)`.
+    function CAICResult{T,M}(
+        caic::T,
+        dof::T,
+        condloglik::T,
+        reducedmodel::Union{Nothing,M},
+        refit::Bool,
+        method::Symbol,
+        bsource::Symbol,
+    ) where {T<:AbstractFloat,M<:RegressionModel}
+        return new{T,M}(caic, dof, condloglik, reducedmodel, refit, method, bsource)
+    end
 end
 
 """
@@ -142,6 +164,15 @@ struct WeightResult{T<:AbstractFloat}
     duration::Float64
 end
 
+# The `caic` scoring options a `modelavg` call used, captured so the Zhang slow path of
+# `getweights` re-scores ρ with the *same* options the candidates were scored under (rather
+# than `caic`'s defaults). Concrete field types — `nboot`'s small `Union{Int,Nothing}` mirrors
+# `caic`'s own signature; `sigmapenalty` is narrowed to `Int` on construction. `rng` is not
+# captured: `modelavg` exposes no `rng` kwarg, so both paths use `default_rng()`.
+const CAICKwargs = NamedTuple{
+    (:method, :hessian, :nboot, :sigmapenalty),Tuple{Symbol,Symbol,Union{Int,Nothing},Int}
+}
+
 """
     ModelAvgResult{T<:AbstractFloat}
 
@@ -163,6 +194,10 @@ candidates (port of `cAIC4`'s `modelAvg`). Returned by [`modelavg`](@ref).
 - `weightresult::Union{Nothing,WeightResult{T}}` — the full [`WeightResult`](@ref) from the
   Zhang-optimal optimizer (weights, objective `J(ŵ)`, duration) when `weighttype == :zhang`;
   `nothing` on the `:smoothed` path.
+- `caickwargs::CAICKwargs` — the `caic` scoring options (`method`, `hessian`, `nboot`,
+  `sigmapenalty`) this `modelavg` call used. Captured so the Zhang slow path of
+  [`getweights`](@ref) re-scores ρ under the *same* options the candidates were scored with,
+  not `caic`'s defaults.
 
 The result is **not** itself a fitted model — it is a pair of name-keyed averaged-coefficient
 vectors plus the weight provenance.
@@ -179,6 +214,7 @@ struct ModelAvgResult{T<:AbstractFloat}
     models::Vector{LinearMixedModel{T}}
     weighttype::Symbol
     weightresult::Union{Nothing,WeightResult{T}}
+    caickwargs::CAICKwargs
 end
 
 # The full model-averaging report (port of `cAIC4`'s `summaryMA`, folded into the result's

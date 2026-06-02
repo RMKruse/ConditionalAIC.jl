@@ -14,7 +14,7 @@
 # The Julia Level-2 test scores the *identical* embedded sample with `cAIC.caic` (which
 # cascades the same boundary reduction) and compares within atol = 1e-3 (DECISIONS.md).
 #
-# `cAIC4` is sourced directly from the committed source tree. HDF5: `rhdf5`.
+# `cAIC4` is sourced directly from the committed source tree. HDF5 I/O via `test/fixture_io.R` (hdf5r/rhdf5).
 #
 # Run `generate_fixtures_glmm_singular.jl` FIRST (it writes the sample + skeleton).
 #
@@ -26,7 +26,7 @@
 # Usage:  Rscript test/generate_fixtures_glmm_singular.R
 
 suppressMessages({
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
   library(lme4)
 })
 
@@ -91,7 +91,7 @@ put(paste0(grp, "/new"), as.integer(isTRUE(r$new))) # boundary-refit flag
 
 put("meta/caic4_version", caic4_version)
 put("meta/lme4_version", as.character(packageVersion("lme4")))
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/r_version", R.version.string)
 
 h5closeAll()

@@ -13,7 +13,7 @@
 # Ground-truth function: `cAIC4::biasCorrectionBernoulli` (v1.1).
 #
 # cAIC4 source: sourced directly from CAIC4_SRC (default /private/tmp/cAIC4_src).
-# Required packages: lme4, rhdf5.
+# Required packages: lme4; HDF5 I/O via test/fixture_io.R (hdf5r/rhdf5).
 #
 # The formula is pinned textually: if `biasCorrectionBernoulli` drifts from the
 # expected source-code pattern, this script stops loud rather than silently writing
@@ -27,7 +27,7 @@
 # Usage:  Rscript test/generate_fixtures_bernoulli.R
 
 suppressMessages(library(lme4))
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")
@@ -109,7 +109,7 @@ put("group",   as.integer(group))
 put("rho_ref", rho_ref)
 
 put("meta/cAIC4_version", caic4_version)
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version",     R.version.string)
 put("meta/n",             as.integer(n))
 put("meta/n_groups",      as.integer(n_groups))

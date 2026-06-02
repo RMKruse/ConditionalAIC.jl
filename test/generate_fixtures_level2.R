@@ -18,8 +18,8 @@
 # `calculateGaussianBc`). The gated live-RCall CI job re-validates against an installed
 # `cAIC4`.
 #
-# HDF5 writer: `rhdf5` (Bioconductor), matching `generate_fixtures.R` (see its header for
-# why `rhdf5` substitutes for `hdf5r` on macOS-ARM).
+# HDF5 I/O via `test/fixture_io.R` (hdf5r on Linux CI, rhdf5 on macOS-ARM), matching
+# `generate_fixtures.R` (see its header and the ADR-0003 addenda).
 #
 # Env vars:
 #   CAIC4_SRC  path to the cAIC4 source tree (default /private/tmp/cAIC4_src)
@@ -28,7 +28,7 @@
 # Usage:  Rscript test/generate_fixtures_level2.R
 
 suppressMessages({
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
   library(lme4)
 })
 
@@ -107,7 +107,7 @@ for (name in names(cases)) {
 h5createGroup(fixture, "meta")
 h5write(caic4_version, fixture, "meta/cAIC4_version")
 h5write(as.character(packageVersion("lme4")), fixture, "meta/lme4_version")
-h5write(as.character(packageVersion("rhdf5")), fixture, "meta/rhdf5_version")
+h5write(fixture_hdf5_backend(), fixture, "meta/hdf5_backend")
 h5write(R.version.string, fixture, "meta/R_version")
 
 cat(sprintf(

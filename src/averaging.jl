@@ -82,11 +82,14 @@ function modelavg(
     )
 
     # Per-candidate scoring in INPUT order (the unsorted anocAIC analogue, docs/math/0009 §0).
+    # The scoring options are captured into `caickwargs` so `getweights`'s Zhang slow path can
+    # re-score ρ under the same options rather than `caic`'s defaults.
+    caickwargs = CAICKwargs((method, hessian, nboot, Int(sigmapenalty)))
     n = length(ms)
     caic_results = Vector{CAICResult{T,LinearMixedModel{T}}}(undef, n)
     caics = Vector{T}(undef, n)
     for (i, m) in enumerate(ms)
-        r = caic(m; method=method, hessian=hessian, nboot=nboot, sigmapenalty=sigmapenalty)
+        r = caic(m; caickwargs...)
         caic_results[i] = r
         caics[i] = r.caic
     end
@@ -102,7 +105,7 @@ function modelavg(
     fixeff = _avgfixeff(ms, w)
     raneff = _avgraneff(ms, w)
     return ModelAvgResult{T}(
-        fixeff, raneff, w, caics, collect(LinearMixedModel{T}, ms), weights, wr
+        fixeff, raneff, w, caics, collect(LinearMixedModel{T}, ms), weights, wr, caickwargs
     )
 end
 
@@ -293,7 +296,10 @@ Lagrangian SQP of `cAIC4`'s weight optimizer.
 
 # Arguments
 - `res`: a [`ModelAvgResult`](@ref) (from [`modelavg`](@ref)). The candidate models,
-  response, and cAIC scoring are re-used; no new model fitting is performed.
+  response, and cAIC scoring are re-used; no new model fitting is performed. When `res` is a
+  `:zhang` result the stored [`WeightResult`](@ref) is returned directly; on the `:smoothed`
+  slow path ρ is re-scored with [`caic`](@ref) under `res.caickwargs` — the same options
+  `modelavg` scored the candidates with, not `caic`'s defaults.
 
 # Returns
 - A [`WeightResult`](@ref) with the optimal `weights`, the minimised `objective` J(ŵ),
@@ -323,9 +329,11 @@ function getweights(res::ModelAvgResult{T}) where {T}
         return res.weightresult::WeightResult{T}
     end
     # Slow path (e.g. a :smoothed result): re-score with caic to get full-precision ρ
-    # (docs/math/0009 §6.1: not rounded), then run the optimizer.
+    # (docs/math/0009 §6.1: not rounded), then run the optimizer. Re-score under the SAME
+    # options `modelavg` scored the candidates with (`res.caickwargs`) — not `caic`'s defaults —
+    # so the optimizer's ρ matches the ρ behind `res.caics`.
     ms = res.models
-    rho = T[caic(m).dof for m in ms]
+    rho = T[caic(m; res.caickwargs...).dof for m in ms]
     return _zhangweightresult(ms, rho)
 end
 

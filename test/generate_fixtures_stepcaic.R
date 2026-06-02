@@ -20,7 +20,7 @@
 # correlated flag because the term *structure* already distinguishes the two (one two-label term
 # vs two one-label terms).
 #
-# HDF5 writer: `rhdf5` (ADR-0003 addendum 2026-05-27), as in the other generators.
+# HDF5 I/O via `test/fixture_io.R` (hdf5r/rhdf5; ADR-0003 addenda), as in the other generators.
 #
 # Env vars:
 #   CAIC4_SRC  path to the cAIC4 source tree (default /private/tmp/cAIC4_src) — for the version stamp
@@ -29,7 +29,7 @@
 # Usage:  Rscript test/generate_fixtures_stepcaic.R
 
 suppressMessages(library(cAIC4))
-suppressMessages(library(rhdf5))
+suppressMessages(source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R")))
 
 caic4_src <- Sys.getenv("CAIC4_SRC", "/private/tmp/cAIC4_src")
 fixture <- Sys.getenv("FIXTURE", "")
@@ -164,7 +164,7 @@ for (sc in scenarios) {
 
 h5createGroup(fixture, "meta")
 put("meta/cAIC4_version", caic4_version)
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version", R.version.string)
 
 cat(sprintf("Wrote %d backward scenario(s) to %s (cAIC4 %s).\n",

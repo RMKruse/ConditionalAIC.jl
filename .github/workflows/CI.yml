@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['*']
+  pull_request:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,9 +35,12 @@ jobs:
           end
 
   # Gates 2 & 3 — JET static analysis and the full test suite (Aqua + @inferred +
-  # smoke), run inside `Pkg.test`. No R required. JET runs on the released versions
-  # only: no JET release supports prerelease Julia, so on `nightly` it is dropped
-  # from the test env here and the JET test-item self-skips (see test/quality_tests.jl).
+  # smoke), run inside `Pkg.test`. No R required. JET runs on Julia 1.12 only: JET
+  # 0.11 transitively requires Julia >= 1.12 (via PrecompileTools 1.3.x), so it is
+  # uninstallable on the 1.10/1.11 LTS matrix, and no JET release supports prerelease
+  # Julia. On every version except 1.12 it is therefore dropped from the test env here
+  # and the JET test-item self-skips (see test/quality_tests.jl); 1.12 is the single
+  # version that both hosts the JET gate and is a released compiler.
   test:
     name: Test - Julia ${{ matrix.version }}
     runs-on: ubuntu-latest
@@ -43,15 +48,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.10', '1.11', 'nightly']
+        version: ['1.10', '1.11', '1.12', 'nightly']
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
-      - name: Drop JET from the test env on prerelease Julia
-        if: ${{ matrix.version == 'nightly' }}
+      - name: Drop JET from the test env where it is unavailable (everything but 1.12)
+        if: ${{ matrix.version != '1.12' }}
         shell: julia --color=yes {0}
         run: |
           using TOML
@@ -60,7 +65,7 @@ jobs:
           haskey(proj, "deps") && delete!(proj["deps"], "JET")
           haskey(proj, "compat") && delete!(proj["compat"], "JET")
           open(io -> TOML.print(io, proj; sorted=true), path, "w")
-          @info "Removed JET from $(path) — no JET release supports this Julia"
+          @info "Removed JET from $(path) — JET 0.11 needs Julia >= 1.12 (or this is prerelease)"
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
 
@@ -68,10 +73,16 @@ jobs:
   # it stands up R, regenerates the Level-1 components, recomputes the reference ρ with
   # live cAIC4, and re-validates `dof_lmm` against it — catching fixture rot. Gated by
   # `CAIC_LIVE_RCALL=1`; runs on pushes to `main`, never in the default no-R path.
-  # The R HDF5 reader is `rhdf5` (bundles its own HDF5 via Rhdf5lib); see ADR-0003.
+  # The R HDF5 package is `hdf5r` (links system libhdf5, installed as a Posit PM binary);
+  # the generators reach it through `test/fixture_io.R`, which falls back to `rhdf5` on
+  # platforms where `hdf5r` does not build (macOS-ARM local). See ADR-0003.
   live-rcall:
     name: Live R re-validation (cAIC4)
     runs-on: ubuntu-latest
+    # Push-only: this job stands up R + system HDF5 + cAIC4 from scratch, far too heavy to
+    # run on every PR. Fixture rot is caught post-merge on `main` (and on tags). PRs get the
+    # fast, no-R fixture path via the `test` job.
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -81,11 +92,14 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: 'release'
-      - name: Install rhdf5 (bundles HDF5 via Rhdf5lib)
+      - name: Install system HDF5 (libhdf5 for the hdf5r R package)
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
+      - name: Install hdf5r (links system libhdf5; binary via Posit PM)
         shell: Rscript {0}
         run: |
-          if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
-          BiocManager::install("rhdf5", update = FALSE, ask = FALSE)
+          install.packages("hdf5r")
+          # Fail loud here rather than mid-fixture if the package did not install/load.
+          stopifnot("hdf5r failed to install/load" = requireNamespace("hdf5r", quietly = TRUE))
       - name: Fetch the pinned cAIC4 v1.1 source (ground truth)
         run: |
           set -e

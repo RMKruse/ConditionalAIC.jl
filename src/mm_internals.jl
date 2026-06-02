@@ -18,6 +18,7 @@ first.
 | Touchpoint        | Kind        | Used by             | Extracted quantity                                       |
 |:------------------|:------------|:--------------------|:---------------------------------------------------------|
 | `m.optsum.REML`   | field       | [`reml`]            | REML flag (`Bool`); which objective was fitted           |
+| `mb.optsum.REML =`| field (mutating write) | [`bootstrapfit`] | set the bootstrap LMM's REML flag (from [`reml`](@ref)) so it optimises the same objective as the original before refitting |
 | `m.optsum.returnvalue` | field  | [`converged`]       | optimizer return code (`Symbol`); non-converged when in the failure modes |
 | `m.sigma`         | property    | [`sigmahat`]        | residual standard deviation σ̂                            |
 | `ranef(m)`        | exported fn | [`bhat`]            | predicted random effects b̂ = λu, per grouping            |
@@ -33,7 +34,7 @@ first.
 | `m.feterm`        | field       | [`reduceboundary`]  | the fixed-effects term `FeTerm`, reused by the reduced fit|
 | `m.formula`       | field       | [`reduceboundary`]  | the model formula (bookkeeping for the reduced-fit ctor) |
 | `re.trm/refs/levels/cnames/z/scratch` | fields | [`reduceboundary`] | `ReMat` design pieces, column-subset to rebuild a reduced `ReMat` |
-| `ReMat{T,S}(…)`   | constructor | [`reduceboundary`]  | rebuild a boundary-reduced random-effects term            |
+| `ReMat{T,S}(…)`   | constructor (10-slot positional) | [`reduceboundary`], [`bootstrapfit`] | rebuild a boundary-reduced random-effects term; the field-name layout is pinned via `_REMAT_FIELDS` (drift-guarded in [`_subsetreterm`]) and the reduced design is passed into **both** the `z` and `wtz` slots — valid because they alias for an unweighted term |
 | `adjA(refs, z)`   | fn          | [`reduceboundary`]  | the `ReMat` adjoint sparse block for the subset design    |
 | `LinearMixedModel(y, feterm, reterms, form)` | constructor | [`reduceboundary`] | assemble the reduced model from reused design objects |
 | `fit!(m)`         | exported fn | [`reduceboundary`], [`bootstrapfit`] | refit the reduced / bootstrap model       |
@@ -54,6 +55,8 @@ first.
 | `m.wt`            | field       | [`reduceboundary`]  | GLMM prior weights; empty for an unweighted fit (then a length-`n` ones vector is supplied) |
 | `m.resp`          | field       | [`reduceboundary`]  | the `GlmResp` (family/link/response), deep-copied into the reduced GLMM |
 | `vsize(t)` / `nlevs(t)` | unexported fns | [`reduceboundary`] | per-reterm random-effect width and group count — size the reduced `u` scratch |
+| `rlmm.reterms`    | field       | [`reduceboundary`]  | reterms of the freshly-built reduced working LMM — iterated (with `vsize`/`nlevs`) to allocate the reduced GLMM's `u`/`u₀`/`b` scratch |
+| `rlmm.θ`          | property    | [`reduceboundary`]  | initial θ of the reduced working LMM (identity λ) — passed into the reduced GLMM's `θ` constructor slot |
 | `GeneralizedLinearMixedModel{T,D}(…)` | constructor | [`reduceboundary`] | assemble the reduced GLMM around the reduced working LMM |
 | `refit!(m, y)`    | exported fn | [`bootstrapglmmfit`], [`refitglmm_eta`], [`bernoulliflipmu`] | refit a GLMM copy to a new response vector y |
 | `m.η` (post-refit)| property    | [`refitglmm_eta`]   | linear predictor η̂ of the refitted GLMM copy (Chen–Stein refit loop) |
@@ -86,9 +89,6 @@ using MixedModels:
     ReMat,
     vsize,
     nlevs,
-    Poisson,
-    Binomial,
-    Bernoulli,
     ranef,
     response,
     fitted,
@@ -102,7 +102,6 @@ using MixedModels:
 using MixedModels: MixedModels
 using FiniteDiff: finite_difference_hessian
 using ForwardDiff: ForwardDiff
-using Random: AbstractRNG
 
 const PINNED_VERSION = "5.5.1"
 
@@ -121,6 +120,25 @@ const SM = MixedModels.StatsModels
          the internal-access table in `MMInternals` against the new version before use."
     )
 end
+
+# The exact field-name layout of `GeneralizedLinearMixedModel` (pinned MixedModels
+# v5.5.1), against which [`reduceboundary`](@ref) constructs a reduced GLMM
+# positionally. Guarding the names — not just the per-field types the parametric
+# constructor checks — is what catches a reorder among the many same-typed fields.
+const _GLMM_FIELDS = (
+    :LMM, :β, :β₀, :θ, :b, :u, :u₀, :resp, :η, :wt, :devc, :devc0, :sd, :mult
+)
+
+# The exact field-name layout of `ReMat` (pinned MixedModels v5.5.1), against which
+# [`_subsetreterm`](@ref) rebuilds a boundary-reduced random-effects term via the 10-slot
+# positional constructor. The reduced design `znew` is passed into BOTH the `z` (slot 5) and
+# `wtz` (slot 6) slots — valid only because they alias for an unweighted term (the `ReMat`
+# docstring: "z and wtz are the same object for unweighted cases"). A reorder among the
+# same-typed slots (`z`/`wtz`, both `Matrix{T}`; `refs`/`inds`; the design/scratch matrices)
+# would be silently accepted by the positional constructor, yielding a malformed `ReMat` with
+# no error — so pin the names and fail loud on drift, exactly as `_GLMM_FIELDS` guards the
+# GLMM constructor.
+const _REMAT_FIELDS = (:trm, :refs, :levels, :cnames, :z, :wtz, :λ, :inds, :adjA, :scratch)
 
 """
     reml(m::LinearMixedModel) -> Bool
@@ -338,15 +356,8 @@ random-effect direction is on the boundary (no random-effects model remains — 
 falls back to the fixed-effects-only score, mirroring `cAIC4`'s `lm` branch).
 """
 function reduceboundary(m::LinearMixedModel{T}) where {T}
-    reduced = AbstractReMat{T}[]
-    for re in m.reterms
-        re isa ReMat || _drift("m.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        keep = [d for d in 1:S if re.λ[d, d] != 0]
-        isempty(keep) && continue
-        push!(reduced, _subsetreterm(re, keep))
-    end
-    isempty(reduced) && return nothing
+    reduced = _reducedreterms(m.reterms, T, "m.reterms element")
+    reduced === nothing && return nothing
     mr = LinearMixedModel(response(m), m.feterm, reduced, m.formula)
     fit!(mr; progress=false)
     return mr
@@ -372,6 +383,12 @@ function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
         indsnew = [i + (j - 1) * Snew for j in 1:Snew for i in j:Snew]
     end
     scratchnew = Matrix{T}(undef, Snew, size(re.scratch, 2))
+    # The 10-arg construction below is purely positional; `znew` lands in both the `z` and
+    # `wtz` slots, and several same-typed fields neighbour each other — so a field reorder in
+    # a future MixedModels would be silently accepted, yielding a malformed `ReMat`. Pin the
+    # exact field-name layout so any reorder/rename/addition fails loud here.
+    fieldnames(ReMat) === _REMAT_FIELDS ||
+        _drift("ReMat field layout", _REMAT_FIELDS, fieldnames(ReMat))
     return ReMat{T,Snew}(
         re.trm,
         re.refs,
@@ -384,6 +401,32 @@ function _subsetreterm(re::ReMat{T}, keep::Vector{Int}) where {T}
         adjA(re.refs, znew),
         scratchnew,
     )
+end
+
+# The surviving (non-boundary) directions of one reterm: the 1-based indices `d` whose
+# relative-covariance diagonal `λ[d, d]` is off the boundary (`≠ 0`) — the `cAIC4` `theta != 0`
+# direction filter shared by the boundary-reduction builders and the full-singularity query. An
+# empty result marks a reterm with every direction on the boundary. `driftlabel` names the
+# reterm source for the drift error.
+function _keptdirections(re, driftlabel::AbstractString)
+    re isa ReMat || _drift(driftlabel, "ReMat", re)
+    S = size(re.λ, 1)
+    return [d for d in 1:S if re.λ[d, d] != 0]
+end
+
+# One structural reduction of a reterm collection: drop every boundary direction from each
+# reterm and rebuild the survivors fresh (via [`_subsetreterm`]), returning the reduced reterm
+# vector — or `nothing` when no direction survives anywhere (the model collapses to
+# fixed-effects only). The shared core of both [`reduceboundary`] methods (the Gaussian fit and
+# the GLMM's working LMM); `driftlabel` names the reterm source for the drift error.
+function _reducedreterms(reterms, ::Type{T}, driftlabel::AbstractString) where {T}
+    reduced = AbstractReMat{T}[]
+    for re in reterms
+        keep = _keptdirections(re, driftlabel)
+        isempty(keep) && continue
+        push!(reduced, _subsetreterm(re, keep))
+    end
+    return isempty(reduced) ? nothing : reduced
 end
 
 """
@@ -484,7 +527,7 @@ function bootstrapfit(m::LinearMixedModel{T}, y_star::Vector{T}) where {T}
         _subsetreterm(re, collect(1:size(re.λ, 1))) for re in m.reterms
     ]
     mb = LinearMixedModel(y_star, m.feterm, fresh_reterms, m.formula)
-    mb.optsum.REML = m.optsum.REML
+    mb.optsum.REML = reml(m)   # mutating write — propagate the original's objective (table)
     fit!(mb; progress=false)
     return conditionalmean(mb)
 end
@@ -506,9 +549,7 @@ or for a non-singular fit — those cases are handled by the general GLMM influe
 """
 function glmmisfullysingular(m::GeneralizedLinearMixedModel)
     for re in m.LMM.reterms
-        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        any(d -> re.λ[d, d] != 0, 1:S) && return false
+        isempty(_keptdirections(re, "m.LMM.reterms element")) || return false
     end
     return true
 end
@@ -542,15 +583,20 @@ the `LinearMixedModel` method and `cAIC4`'s `glm` branch.
 """
 function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
     lmm = m.LMM
-    reduced = AbstractReMat{T}[]
-    for re in lmm.reterms
-        re isa ReMat || _drift("m.LMM.reterms element", "ReMat", re)
-        S = size(re.λ, 1)
-        keep = [d for d in 1:S if re.λ[d, d] != 0]
-        isempty(keep) && continue
-        push!(reduced, _subsetreterm(re, keep))
-    end
-    isempty(reduced) && return nothing
+    reduced = _reducedreterms(lmm.reterms, T, "m.LMM.reterms element")
+    reduced === nothing && return nothing
+
+    # The 14-arg construction below is purely positional, and eight fields share
+    # `Vector{T}` (β, β₀, η, wt, devc, devc0, sd, mult) while three share
+    # `Vector{Matrix{T}}` (b, u, u₀) — so a field *reorder* among same-typed fields in
+    # a future MixedModels would be silently accepted by the parametric constructor,
+    # yielding a wrong reduced model with no error. Pin the exact field-name layout so
+    # any reorder/rename/addition/removal fails loud here rather than downstream.
+    fieldnames(GeneralizedLinearMixedModel) === _GLMM_FIELDS || _drift(
+        "GeneralizedLinearMixedModel field layout",
+        _GLMM_FIELDS,
+        fieldnames(GeneralizedLinearMixedModel),
+    )
 
     y = glmmresponse(m)                       # m.resp.y, shape-asserted to Vector{T}
     β = m.β
@@ -577,6 +623,16 @@ function reduceboundary(m::GeneralizedLinearMixedModel{T,D}) where {T,D}
         similar(vv),
         similar(vv),
         similar(vv),
+    )
+    # Sanity-check that the positional args landed in dimensionally coherent fields: the
+    # fixed-effects vector is length rank(X) and the per-observation buffers are length n.
+    # A reorder that swapped a length-p field with a length-n one (undetectable by the
+    # name check if upstream also renamed) surfaces here before the refit consumes it.
+    (length(mr.β) == length(β) && length(mr.η) == length(y)) || _drift(
+        "reduced GLMM dimensions (β: $(length(mr.β))≠$(length(β)), η: \
+         $(length(mr.η))≠$(length(y)))",
+        "β length $(length(β)), η length $(length(y))",
+        mr,
     )
     fit!(mr; fast=false, nAGQ=1, progress=false)
     return mr
@@ -749,89 +805,14 @@ The prior-weights vector `m.resp.wts` — the per-observation binomial denominat
 a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Bernoulli);
 non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
 
-Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
+Used by [`glmmconddraw`](@ref ConditionalAIC.DofGLMM.glmmconddraw) to reconstruct the
+per-observation `Binomial(nᵢ, μ̂ᵢ)`
 distribution for conditional bootstrap draws.
 """
 function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}
     wts = m.resp.wts
     wts isa Vector{T} || _drift("m.resp.wts", Vector{T}, wts)
     return wts
-end
-
-"""
-    glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) -> Matrix{T}
-
-Draw `B` conditional bootstrap samples from the GLMM response distribution, holding the
-random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
-an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
-
-Draws directly from `f(μ̂ᵢ)`:
-- **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
-- **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
-  [`glmmpriorweights`](@ref).
-- **Bernoulli:** `yᵢ^{(b)} = rand(Bernoulli(μ̂ᵢ))` (0.0 or 1.0)
-
-Unsupported families (free-dispersion etc.) raise `ArgumentError`.
-
-# Throws
-- `ArgumentError` for unsupported distribution families.
-- `ArgumentError` if the Binomial model has no prior weights.
-"""
-function glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) where {T}
-    μ = glmmfittedmu(m)
-    n = length(μ)
-    Ystar = Matrix{T}(undef, n, B)
-    _fill_conddraw!(rng, Ystar, μ, glmmdist(m), m)
-    return Ystar
-end
-
-function _fill_conddraw!(
-    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Poisson, _m
-) where {T}
-    n, B = size(Ystar)
-    for b in 1:B, i in 1:n
-        Ystar[i, b] = T(rand(rng, Poisson(μ[i])))
-    end
-    return Ystar
-end
-
-function _fill_conddraw!(
-    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Bernoulli, _m
-) where {T}
-    n, B = size(Ystar)
-    for b in 1:B, i in 1:n
-        Ystar[i, b] = T(rand(rng, Bernoulli(μ[i])))
-    end
-    return Ystar
-end
-
-function _fill_conddraw!(
-    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Binomial, m
-) where {T}
-    wts = glmmpriorweights(m)
-    isempty(wts) && throw(
-        ArgumentError(
-            "glmmconddraw: conditional bootstrap for Binomial GLMM requires prior weights " *
-            "(number of trials per observation). Refit the model with `weights=ntrials`.",
-        ),
-    )
-    n, B = size(Ystar)
-    for b in 1:B, i in 1:n
-        ni = Int(wts[i])
-        Ystar[i, b] = T(rand(rng, Binomial(ni, μ[i]))) / T(ni)
-    end
-    return Ystar
-end
-
-function _fill_conddraw!(rng, Ystar, μ, d, _m)
-    throw(
-        ArgumentError(
-            "glmmconddraw: family $(typeof(d)) is not supported by the conditional " *
-            "bootstrap. Supported: Poisson (log link), Bernoulli (logit link), Binomial " *
-            "(logit link, with prior weights). Free-dispersion families are outside M3 " *
-            "scope — matches cAIC4's \"not yet supported\" warning.",
-        ),
-    )
 end
 
 # ── RE-structure interpretation (M4) ───────────────────────────────────────────

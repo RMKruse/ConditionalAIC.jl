@@ -30,7 +30,7 @@ All access to `MixedModels.jl` internals is quarantined in
 module DofGLMM
 
 using LogExpFunctions: logit
-using MixedModels: GeneralizedLinearMixedModel
+using MixedModels: GeneralizedLinearMixedModel, Poisson, Bernoulli, Binomial
 using Random: AbstractRNG, Xoshiro
 using ..DofLMM: efron_penalty
 using ..MMInternals
@@ -159,6 +159,14 @@ function dof_glmm_poisson(m::GeneralizedLinearMixedModel{T}) where {T}
     ind = findall(!=(zero(T)), y)
     isempty(ind) && return zero(T)
 
+    # One full-model refit per nonzero observation, each from a fresh copy of the ORIGINAL fit
+    # (`refitglmm_eta` deep-copies `m` per call): decrement yᵢ by one (the Chen–Stein / Hudson
+    # unit decrement) and read the i-th refitted linear predictor η̂ᵢ^{(−i)}. The per-i fresh copy
+    # is deliberate and *not* interchangeable with a single reused buffer: reusing one buffer
+    # warm-starts the fixed-effects β from the previous perturbation's optimum (θ is reset to the
+    # canonical initial either way), which shifts the Poisson df past the Level-2 parity tolerance.
+    # This loop therefore is NOT unified with the Bernoulli flip loop (which does reuse one
+    # buffer) — their buffering differs for a numerical reason, not by oversight.
     eta_dec = Vector{T}(undef, length(ind))
     @inbounds for (k, i) in enumerate(ind)
         y_dec = copy(y)
@@ -245,6 +253,89 @@ end
 # ── dof_glmm_bootstrap — conditional bootstrap (other families) ───────────────
 
 """
+    glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) -> Matrix{T}
+
+Draw `B` conditional bootstrap samples from the GLMM response distribution, holding the
+random effects fixed at their estimated values `b̂` (i.e. using the fitted `μ̂`). Returns
+an `n × B` matrix whose `b`-th column is the `b`-th bootstrap response vector.
+
+Draws directly from `f(μ̂ᵢ)`:
+- **Poisson:** `yᵢ^{(b)} = rand(Poisson(μ̂ᵢ))` (float count)
+- **Binomial:** `yᵢ^{(b)} = rand(Binomial(nᵢ, μ̂ᵢ)) / nᵢ` (proportion); `nᵢ` from
+  [`MMInternals.glmmpriorweights`](@ref).
+- **Bernoulli:** `yᵢ^{(b)} = rand(Bernoulli(μ̂ᵢ))` (0.0 or 1.0)
+
+The fitted mean `μ̂`, distribution family, and prior weights are read through the
+[`MMInternals`](@ref ConditionalAIC.MMInternals) accessors; the family-dispatched sampling
+itself (`_fill_conddraw!`) touches no `MixedModels` internals.
+
+Unsupported families (free-dispersion etc.) raise `ArgumentError`.
+
+# Throws
+- `ArgumentError` for unsupported distribution families.
+- `ArgumentError` if the Binomial model has no prior weights.
+"""
+function glmmconddraw(rng::AbstractRNG, m::GeneralizedLinearMixedModel{T}, B::Int) where {T}
+    μ = MMInternals.glmmfittedmu(m)
+    n = length(μ)
+    Ystar = Matrix{T}(undef, n, B)
+    _fill_conddraw!(rng, Ystar, μ, MMInternals.glmmdist(m), MMInternals.glmmpriorweights(m))
+    return Ystar
+end
+
+# Family-dispatched conditional sampler: fill `Ystar` in place with draws from `f(μ̂)`.
+# Pure — receives the fitted mean `μ`, the distribution family (for dispatch), and the
+# prior weights `wts` as plain data, so it touches no `MixedModels` internals. Poisson and
+# Bernoulli ignore `wts`; the Binomial branch reads the per-observation trial counts from it.
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Poisson, _wts::Vector{T}
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Poisson(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Bernoulli, _wts::Vector{T}
+) where {T}
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        Ystar[i, b] = T(rand(rng, Bernoulli(μ[i])))
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(
+    rng::AbstractRNG, Ystar::Matrix{T}, μ::Vector{T}, ::Binomial, wts::Vector{T}
+) where {T}
+    isempty(wts) && throw(
+        ArgumentError(
+            "glmmconddraw: conditional bootstrap for Binomial GLMM requires prior weights " *
+            "(number of trials per observation). Refit the model with `weights=ntrials`.",
+        ),
+    )
+    n, B = size(Ystar)
+    for b in 1:B, i in 1:n
+        ni = Int(wts[i])
+        Ystar[i, b] = T(rand(rng, Binomial(ni, μ[i]))) / T(ni)
+    end
+    return Ystar
+end
+
+function _fill_conddraw!(rng, Ystar, μ, d, _wts)
+    throw(
+        ArgumentError(
+            "glmmconddraw: family $(typeof(d)) is not supported by the conditional " *
+            "bootstrap. Supported: Poisson (log link), Bernoulli (logit link), Binomial " *
+            "(logit link, with prior weights). Free-dispersion families are outside M3 " *
+            "scope — matches cAIC4's \"not yet supported\" warning.",
+        ),
+    )
+end
+
+"""
     dof_glmm_bootstrap(m::GeneralizedLinearMixedModel{T}; nboot, rng) -> T
 
 Conditional bootstrap effective degrees of freedom for a fitted GLMM with a family
@@ -297,7 +388,7 @@ function dof_glmm_bootstrap(
     n = length(μhat)
     B = nboot
 
-    Ystar = MMInternals.glmmconddraw(rng, m, B)      # n×B conditional draws
+    Ystar = glmmconddraw(rng, m, B)                  # n×B conditional draws
     Etastar = Matrix{T}(undef, n, B)
     for b in 1:B
         Etastar[:, b] = MMInternals.refitglmm_eta(m, Ystar[:, b])

@@ -423,7 +423,7 @@ end
 
     r = caic(gm)
     @test r isa CAICResult{Float64,<:GeneralizedLinearMixedModel}
-    @test r.method == :auto
+    @test r.method == :steinian   # :auto resolves to the analytic correction (Bernoulli Efron Steinian)
     @test r.bsource == :na
     @test r.caic ≈ -2 * r.condloglik + 2 * r.dof rtol = 1e-12
 end

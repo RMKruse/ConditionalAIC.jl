@@ -15,7 +15,7 @@
 # DECISIONS.md, exactly as the `caic` Level-2 gate (`generate_fixtures_level2.R`). No machinery is
 # isolated here — the candidate ENUMERATION is the separate Level-1 gate (§2.5 / §3.6).
 #
-# HDF5 writer: `rhdf5`, as in the other generators. cAIC4 is used as the INSTALLED package (the
+# HDF5 I/O via `test/fixture_io.R` (hdf5r/rhdf5), as in the other generators. cAIC4 is used as the INSTALLED package (the
 # public `stepcAIC`), matching the Level-1 stepcaic generator.
 #
 # Env vars:
@@ -26,7 +26,7 @@
 suppressMessages({
   library(cAIC4)
   library(lme4)
-  library(rhdf5)
+  source(file.path(dirname(normalizePath(sub("^--file=","",commandArgs(FALSE)[grep("^--file=",commandArgs(FALSE))]))),"fixture_io.R"))
 })
 
 fixture <- Sys.getenv("FIXTURE", "")
@@ -279,7 +279,7 @@ cat(sprintf("  %-18s bestCAIC=%.6f  glmTerm=%.6f  final[%s]: %s\n",
 h5createGroup(fixture, "meta")
 put("meta/cAIC4_version", caic4_version)
 put("meta/lme4_version", as.character(packageVersion("lme4")))
-put("meta/rhdf5_version", as.character(packageVersion("rhdf5")))
+put("meta/hdf5_backend", fixture_hdf5_backend())
 put("meta/R_version", R.version.string)
 
 cat(sprintf("Wrote %d driver scenario(s) to %s (cAIC4 %s, lme4 %s).\n",
