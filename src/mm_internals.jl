@@ -805,7 +805,8 @@ The prior-weights vector `m.resp.wts` — the per-observation binomial denominat
 a GLMM fitted with `weights=`. Empty (`T[]`) for unweighted fits (Poisson, Bernoulli);
 non-empty (`T[n₁, …, nₙ]`) for binomial-with-counts fits.
 
-Used by [`glmmconddraw`](@ref) to reconstruct the per-observation `Binomial(nᵢ, μ̂ᵢ)`
+Used by [`glmmconddraw`](@ref ConditionalAIC.DofGLMM.glmmconddraw) to reconstruct the
+per-observation `Binomial(nᵢ, μ̂ᵢ)`
 distribution for conditional bootstrap draws.
 """
 function glmmpriorweights(m::GeneralizedLinearMixedModel{T}) where {T}

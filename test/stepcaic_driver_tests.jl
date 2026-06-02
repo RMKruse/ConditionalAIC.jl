@@ -676,8 +676,9 @@ end
     )
 
     # savedmodels = 0 keeps all distinct scored models; the rest are a plain backward run.
-    opts(skip) =
-        StepcaicOptions(:backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false)
+    opts(skip) = StepcaicOptions(
+        :backward, false, false, 50, 0, skip, Symbol[], Symbol[], 2, false
+    )
 
     noskip = _runstepcaic(
         Float64, m, score, tainted_refit, terminalfit, gencands, opts(false); keep=nothing

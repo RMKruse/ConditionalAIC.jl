@@ -267,7 +267,7 @@ Draws directly from `f(μ̂ᵢ)`:
 
 The fitted mean `μ̂`, distribution family, and prior weights are read through the
 [`MMInternals`](@ref ConditionalAIC.MMInternals) accessors; the family-dispatched sampling
-itself ([`_fill_conddraw!`](@ref)) touches no `MixedModels` internals.
+itself (`_fill_conddraw!`) touches no `MixedModels` internals.
 
 Unsupported families (free-dispersion etc.) raise `ArgumentError`.
 
