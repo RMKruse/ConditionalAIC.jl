@@ -521,7 +521,12 @@ end
                 "$case_id/outputs_r/weights",
             )
             live_w = h5read(tmp, "$case_id/outputs_r/weights")
-            @test live_w ≈ committed_w rtol = 1e-8 atol = 1e-8
+            # cAIC4's `.weightOptim` is a constrained *optimizer*, not a closed-form recompute,
+            # so its converged weights are platform/BLAS-sensitive: the committed fixture was
+            # generated on macOS-ARM and CI regenerates on Linux, which agree only to the
+            # optimizer's cross-platform convergence floor (~1e-6 rel), not machine precision.
+            # Band derived + justified in DECISIONS.md (2026-06-02); real rot moves weights by ≥1e-3.
+            @test live_w ≈ committed_w rtol = 1e-5 atol = 1e-7
         end
     else
         @info "Skipping Zhang Level-1 live-RCall re-validation (set CAIC_LIVE_RCALL=1)"

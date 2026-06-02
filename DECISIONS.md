@@ -6,6 +6,46 @@ decisions (as opposed to `cAIC4`-divergences) live in `docs/adr/`.
 
 ---
 
+## 2026-06-02 — Zhang Level-1 `weights` fixture no-rot guard re-derived to `rtol = 1e-5, atol = 1e-7` (committed-vs-fresh crosses platforms; an *optimizer* output, not a closed-form recompute)
+
+**Status:** accepted (measured).
+
+The live-RCall fixture-rot guard `live R re-validation of the Zhang Level-1 fixture` re-runs
+`generate_fixtures_zhang_level1.R` under live cAIC4 and checks the freshly-computed Zhang-optimal
+weights against the committed `test/fixtures/zhang_weights_level1.h5` (`{case1,case2}/outputs_r/weights`).
+It was asserted at `rtol = 1e-8, atol = 1e-8` with the rationale "deterministic recompute → machine
+precision". That rationale is wrong for *these* values: the weights are the output of cAIC4's
+`.weightOptim` **constrained optimizer**, not a closed-form quantity.
+
+**Symptom.** The guard failed on the Linux `live-rcall` job (push to `main`, run 26843605889):
+
+```
+Evaluated: [0.05959492331433996, 0.23134203086351302, 0.7090630458221526]
+        ≈  [0.05959498854862226, 0.23134199694704155, 0.7090630145043499]  (rtol=1e-8, atol=1e-8)
+```
+
+Worst element: `|Δ| = 6.5e-8` on the smallest weight (`0.0596`) → `1.1e-6` relative; the larger
+weights agree to `~1e-7` relative or better.
+
+**Investigation (not a tolerance loosened to mask a defect — CLAUDE §10).** The committed fixture
+was generated on macOS-ARM (Apple Accelerate BLAS, `rhdf5` backend per ADR-0003); CI regenerates on
+Linux (OpenBLAS). `.weightOptim` minimises the Zhang objective under a simplex constraint with an
+iterative optimiser whose stationary point is sensitive to BLAS roundoff in the gradient/Hessian
+evaluations. Two platforms therefore settle on weights that agree only to the optimiser's
+cross-platform **convergence floor** (~1e-6 relative here), exactly as the lme4↔MixedModels Laplace
+fits do for the GLMM Level-2 bands above. This is platform optimiser noise, not a transcription bug:
+the same-run R-vs-Julia Level-1 *machinery* tests (identical synthetic inputs, no cross-platform fit)
+still pass at the tight `rtol = 1e-6, atol = 1e-10`, and the Level-2 weight anchor still passes at
+`atol = 1e-2`.
+
+**Resolution.** Re-derive the no-rot band to `rtol = 1e-5, atol = 1e-7` — ≈9× the observed `1.1e-6`
+cross-platform relative spread, with an absolute floor ≈15× the observed `6.5e-8`. Genuine fixture rot
+(a changed objective, a transcription error, a different input) moves Zhang weights by `≥1e-3` — two
+orders of magnitude above this band — so the guard still bites. Only this cross-platform committed-vs-fresh
+check is touched; the same-run machinery and Level-2 anchors are unchanged.
+
+---
+
 ## 2026-06-02 — Crossed-Poisson GLMM `stepcaic` Level-2 `bestCAIC` band re-derived to `atol = 2e-3` (a *converged* fit drifted past the old 1e-3 band; supersedes the convergence gate)
 
 **Status:** accepted (measured). Supersedes the convergence-gate entry immediately below (and, through

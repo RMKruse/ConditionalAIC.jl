@@ -94,12 +94,19 @@ jobs:
           r-version: 'release'
       - name: Install system HDF5 (libhdf5 for the hdf5r R package)
         run: sudo apt-get update && sudo apt-get install -y libhdf5-dev
-      - name: Install hdf5r (links system libhdf5; binary via Posit PM)
+      - name: Install hdf5r + lme4 (HDF5 hand-off + the Level-2 generators' fit engine)
         shell: Rscript {0}
         run: |
-          install.packages("hdf5r")
-          # Fail loud here rather than mid-fixture if the package did not install/load.
-          stopifnot("hdf5r failed to install/load" = requireNamespace("hdf5r", quietly = TRUE))
+          # hdf5r: the HDF5 hand-off backend (links system libhdf5). lme4: the Level-2
+          # generators (caic, modelavg, predictma) fit `lmer` models and source the pinned
+          # cAIC4 v1.1 tree, whose Gaussian-Bc code calls lme4 — so lme4 must be installed
+          # even though cAIC4 itself stays sourced, not installed (ground truth = the pin).
+          # Binaries via Posit PM (RSPM); lme4 pulls Matrix/nlme/minqa transitively.
+          install.packages(c("hdf5r", "lme4"))
+          # Fail loud here rather than mid-fixture if a package did not install/load.
+          for (p in c("hdf5r", "lme4")) {
+            stopifnot(setNames(requireNamespace(p, quietly = TRUE), paste0(p, " failed to install/load")))
+          }
       - name: Fetch the pinned cAIC4 v1.1 source (ground truth)
         run: |
           set -e
